@@ -11,5 +11,6 @@
             "path": "Library/talib"
         }
     ],
-    "deployment-target": "Cloud Platform"
+    "deployment-target": "Cloud Platform",
+    "encrypted": false
 }

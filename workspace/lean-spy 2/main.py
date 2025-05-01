@@ -43,4 +43,3 @@ class ScheduleBuyOnCloseSellOpen(QCAlgorithm):
             self.MarketOnCloseOrder(self.security.Symbol, quantity)
             # reset the closingOrderSent variable for the next day
             self.closingOrderSent = True
-

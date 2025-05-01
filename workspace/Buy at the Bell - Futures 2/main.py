@@ -265,4 +265,3 @@ class SymbolData:
 
             return False
     
-
