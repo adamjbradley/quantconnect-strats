@@ -1,0 +1,8 @@
+{
+    "cloud-id": 14847208,
+    "algorithm-language": "Python",
+    "parameters": {},
+    "description": "By selecting the most correlated 2 constituents of the tech sector ETF, this strategy trades possible mispricing with cointegrating vector.",
+    "organization-id": "9c2726f8cf057e5eb5c037ff8fdf4aa5",
+    "python-venv": 1
+}

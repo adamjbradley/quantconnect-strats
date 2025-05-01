@@ -1,0 +1,5 @@
+workspace/data/equity/
+workspace/.QuantConnect/
+workspace/data/
+.QuantConnect/cache/
+lean-local.sln

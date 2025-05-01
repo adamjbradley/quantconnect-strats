@@ -1,0 +1,14 @@
+{
+    "cloud-id": 22725773,
+    "algorithm-language": "Python",
+    "parameters": {
+        "minutes_before_close": "5",
+        "n_estimators": "100",
+        "min_samples_split": "5",
+        "lookback_days": "360",
+        "pcm_periods": "5"
+    },
+    "description": "This algorithm uses a Random Forest Regression model to predict the future closing prices of stocks. The Portfolio Construction model then uses the predictions to form a portfolio with the least volatility possible while achieving a target return of 2%.",
+    "organization-id": "9c2726f8cf057e5eb5c037ff8fdf4aa5",
+    "python-venv": 1
+}

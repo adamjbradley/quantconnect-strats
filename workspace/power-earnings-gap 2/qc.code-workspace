@@ -1,0 +1,62 @@
+{
+    "folders": [
+        {
+            "name": "Project",
+            "path": "/Users/adambradley/Projects/Finance/Backtesting/lean-local/workspace/power-earnings-gap 2"
+        },
+        {
+            "name": "talib",
+            "path": "../Library/talib"
+        }
+    ],
+    "settings": {
+        "python.autoComplete.extraPaths": [
+            "/Users/adambradley/Projects/Finance/Backtesting/lean-local/workspace/Library"
+        ],
+        "python.analysis.extraPaths": [
+            "/Users/adambradley/Projects/Finance/Backtesting/lean-local/workspace/Library"
+        ],
+        "files.autoSave": "afterDelay",
+        "files.exclude": {
+            "**.vscode": true,
+            "**.idea": true,
+            "config.json": true,
+            "qc.code-workspace": true,
+            "bin": true,
+            "obj": true,
+            "backtests": true,
+            "live": true,
+            "optimizations": true,
+            "storage": true,
+            "report": true,
+            "__pycache__": true,
+            ".ipynb_checkpoints": true,
+            ".idea": true,
+            ".vscode": true
+        },
+        "files.watcherExclude": {
+            "bin/**": true,
+            "obj/**": true,
+            "backtests/**": true,
+            "live/**": true,
+            "optimizations/**": true,
+            "storage/**": true,
+            "report/**": true,
+            "__pycache__/**": true,
+            ".ipynb_checkpoints/**": true,
+            ".idea/**": true,
+            ".vscode/**": true
+        },
+        "files.readonlyInclude": {
+            "**/*.py": false,
+            "**/*.cs": false,
+            "**/*.ipynb": false,
+            "/Users/adambradley/Projects/Finance/Backtesting/lean-local/workspace/Library/talib/**/*.py": false,
+            "/Users/adambradley/Projects/Finance/Backtesting/lean-local/workspace/Library/talib/**/*.cs": false,
+            "/Users/adambradley/Projects/Finance/Backtesting/lean-local/workspace/Library/talib/**/*.ipynb": false,
+            "/Users/adambradley/Projects/Finance/Backtesting/lean-local/workspace/power-earnings-gap 2/**/*.py": false,
+            "/Users/adambradley/Projects/Finance/Backtesting/lean-local/workspace/power-earnings-gap 2/**/*.cs": false,
+            "/Users/adambradley/Projects/Finance/Backtesting/lean-local/workspace/power-earnings-gap 2/**/*.ipynb": false
+        }
+    }
+}
