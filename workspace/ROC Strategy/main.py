@@ -8,12 +8,18 @@ class ROCReboundStrategy(QCAlgorithm):
 
         self.debug_mode = True
         self.log_level = 1  # 0 = Off, 1 = Key Events, 2 = Verbose
+        self.enforce_max_holding = True  # Feature flag: Set to False to disable time-based exits
+        self.max_holding_days = 15  # Feature flag: Max number of days to hold a position
+        self.trade_allocation_pct = 0.01  # Feature flag: percent of cash to allocate per trade
+        self.PlotROC = True  # Feature flag to plot ROC values for each symbol
 
         self.symbols = []
         self.to_buy = {}  # {symbol: signal_date}
-        self.pending_buys = {}  # {symbol: {weight, signal_date}}
+        self.pending_buys = {}  # {symbol: {quantity, signal_date}}
         self.open_positions = {}  # {symbol: {entry, target, stop, entry_date}}
         self.atr_indicators = {}
+        self.roc_indicators = {}
+        self.roc_windows = {}
 
         self.AddUniverse(self.CoarseSelectionFunction)
         self.Schedule.On(self.DateRules.EveryDay(), self.TimeRules.At(10, 0), self.Evaluate)
@@ -29,14 +35,6 @@ class ROCReboundStrategy(QCAlgorithm):
         )[:1000]
         self.symbols = [x.Symbol for x in selected]
         return self.symbols
-
-    def CoarseSelectionFunction(self, coarse):
-        # Filter for stocks with fundamental data
-        filtered = [x for x in coarse if x.HasFundamentalData]
-        # Sort by market capitalization in descending order
-        sorted_by_market_cap = sorted(filtered, key=lambda x: x.MarketCap, reverse=True)
-        # Select the top 1000
-        return [x.Symbol for x in sorted_by_market_cap[:1000]]
 
     def Evaluate(self):
         for symbol in self.symbols:
@@ -61,11 +59,36 @@ class ROCReboundStrategy(QCAlgorithm):
             if close_past == 0 or close_yest_past == 0 or close_3ago_past == 0:
                 continue
 
-            roc_today = ((close_today - close_past) / close_past) * 100
-            roc_yesterday = ((close_yest - close_yest_past) / close_yest_past) * 100
-            roc_3days_ago = ((close_3ago - close_3ago_past) / close_3ago_past) * 100
+            # Replace manual ROC calculations with QCAlgorithm ROC indicator
+            if symbol not in self.roc_indicators:
+                self.roc_indicators[symbol] = self.ROC(symbol, self.lookback, Resolution.DAILY)
 
-            self.log(2, f"{self.Time.date()} {symbol.Value} | ROC: {roc_today:.1f}>{roc_3days_ago:.1f}")
+            roc = self.roc_indicators[symbol]
+            if not roc.IsReady:
+                self.log(2, f"{symbol.Value}: ROC not ready")
+                continue
+
+            # For comparison with yesterday and 3 days ago, use ROC indicator history
+            if symbol not in self.roc_windows:
+                self.roc_windows 
+
+            window = self.roc_windows[symbol]
+            window.Add(roc.Current)
+
+            if window.Count < 4:
+                self.log(2, f"{symbol.Value}: Not enough ROC history for comparisons")
+                continue
+
+            roc_today = window[0]
+            roc_yesterday = window[1]
+            roc_3days_ago = window[3]
+
+            if self.PlotROC and (symbol in self.to_buy or self.Portfolio[symbol].Invested):
+                plot_symbol = symbol.Value[:10]  # Trim long names for plotting
+                self.Plot(plot_symbol, "ROC Today", roc_today)
+                self.Plot(plot_symbol, "ROC Yesterday", roc_yesterday)
+                self.Plot(plot_symbol, "ROC 3 Days Ago", roc_3days_ago)
+            self.log(2, f"{self.Time.date()} {symbol.Value} | ROC: {roc_today:.1f}>{roc_yesterday:.1f}, {roc_3days_ago:.1f}")
 
             deep_drop = roc_today < -20
 
@@ -75,12 +98,10 @@ class ROCReboundStrategy(QCAlgorithm):
                     self.log(1, f"{self.Time.date()} SIGNAL {symbol.Value} — Buy scheduled for next day")
 
     def OnData(self, data: Slice):
-        # 0. Clean up open positions that no longer exist
         for symbol in list(self.open_positions.keys()):
             if not self.Portfolio[symbol].Invested:
                 self.open_positions.pop(symbol)
 
-        # 1. Execute scheduled buys
         for symbol, signal_date in list(self.to_buy.items()):
             if self.Time.date() <= signal_date:
                 continue
@@ -93,20 +114,18 @@ class ROCReboundStrategy(QCAlgorithm):
                     self.to_buy.pop(symbol)
                     continue
 
-
                 price = self.Securities[symbol].Price
-
                 if price is None or price <= 0:
                     self.log(1, f"{self.Time.date()} SKIP {symbol.Value} — Invalid or zero price")
                     self.to_buy.pop(symbol)
                     continue
 
                 available_cash = self.Portfolio.Cash
-                max_alloc_cash = available_cash * 0.01
+                max_alloc_cash = available_cash * self.trade_allocation_pct
                 quantity = int(max_alloc_cash / price)
 
                 if quantity <= 0:
-                    self.log(1, f"{self.Time.date()} SKIP {symbol.Value} — 1% allocation too small at price {price:.2f}")
+                    self.log(1, f"{self.Time.date()} SKIP {symbol.Value} — Not enough cash for allocation at price {price:.2f}")
                     self.to_buy.pop(symbol)
                     continue
 
@@ -122,7 +141,6 @@ class ROCReboundStrategy(QCAlgorithm):
                 finally:
                     self.to_buy.pop(symbol)
 
-        # 2. Monitor open positions
         for symbol, pos in list(self.open_positions.items()):
             price = self.Securities[symbol].Price
             target = pos["target"]
@@ -138,9 +156,16 @@ class ROCReboundStrategy(QCAlgorithm):
                 self.log(1, f"{self.Time.date()} SELL {symbol.Value} at {price:.2f} | STOP LOSS ({stop:.2f})")
                 self.open_positions.pop(symbol)
 
+            elif self.enforce_max_holding:
+                holding_days = (self.Time.date() - pos["entry_date"]).days
+                if holding_days > self.max_holding_days:
+                    self.Liquidate(symbol)
+                    self.log(1, f"{self.Time.date()} SELL {symbol.Value} | MAX HOLD ({holding_days} days)")
+                    self.open_positions.pop(symbol)
+
             else:
                 holding_days = (self.Time.date() - pos["entry_date"]).days
-                if holding_days > 15:
+                if self.enforce_max_holding and holding_days > self.max_holding_days:
                     self.Liquidate(symbol)
                     self.log(1, f"{self.Time.date()} SELL {symbol.Value} | MAX HOLDING PERIOD ({holding_days} days)")
                     self.open_positions.pop(symbol)
