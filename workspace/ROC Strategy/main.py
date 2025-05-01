@@ -26,9 +26,17 @@ class ROCReboundStrategy(QCAlgorithm):
         selected = sorted(
             [x for x in coarse if x.HasFundamentalData],
             key=lambda x: -x.DollarVolume
-        )[:3000]
+        )[:1000]
         self.symbols = [x.Symbol for x in selected]
         return self.symbols
+
+    def CoarseSelectionFunction(self, coarse):
+        # Filter for stocks with fundamental data
+        filtered = [x for x in coarse if x.HasFundamentalData]
+        # Sort by market capitalization in descending order
+        sorted_by_market_cap = sorted(filtered, key=lambda x: x.MarketCap, reverse=True)
+        # Select the top 1000
+        return [x.Symbol for x in sorted_by_market_cap[:1000]]
 
     def Evaluate(self):
         for symbol in self.symbols:
@@ -53,16 +61,15 @@ class ROCReboundStrategy(QCAlgorithm):
             if close_past == 0 or close_yest_past == 0 or close_3ago_past == 0:
                 continue
 
-            drop_pct = (close_past - close_today) / close_past * 100
             roc_today = ((close_today - close_past) / close_past) * 100
             roc_yesterday = ((close_yest - close_yest_past) / close_yest_past) * 100
             roc_3days_ago = ((close_3ago - close_3ago_past) / close_3ago_past) * 100
 
-            self.log(2, f"{self.Time.date()} {symbol.Value} | Drop: {drop_pct:.1f}%, ROC: {roc_today:.1f}>{roc_yesterday:.1f}, {roc_3days_ago:.1f}")
+            self.log(2, f"{self.Time.date()} {symbol.Value} | ROC: {roc_today:.1f}>{roc_3days_ago:.1f}")
 
-            deep_drop = drop_pct > 20
+            deep_drop = roc_today < -20
 
-            if deep_drop and roc_today > roc_3days_ago:
+            if deep_drop and roc_today > roc_3days_ago and roc_today > roc_yesterday:
                 if not self.Portfolio[symbol].Invested and symbol not in self.to_buy and symbol not in self.open_positions:
                     self.to_buy[symbol] = self.Time.date()
                     self.log(1, f"{self.Time.date()} SIGNAL {symbol.Value} — Buy scheduled for next day")
@@ -86,18 +93,20 @@ class ROCReboundStrategy(QCAlgorithm):
                     self.to_buy.pop(symbol)
                     continue
 
+
                 price = self.Securities[symbol].Price
-                if price <= 0:
-                    self.log(1, f"{self.Time.date()} SKIP {symbol.Value} — Price unavailable or zero")
+
+                if price is None or price <= 0:
+                    self.log(1, f"{self.Time.date()} SKIP {symbol.Value} — Invalid or zero price")
                     self.to_buy.pop(symbol)
                     continue
 
                 available_cash = self.Portfolio.Cash
-                max_alloc_cash = available_cash * 0.01  # 1% allocation
+                max_alloc_cash = available_cash * 0.01
                 quantity = int(max_alloc_cash / price)
 
                 if quantity <= 0:
-                    self.log(1, f"{self.Time.date()} SKIP {symbol.Value} — Not enough cash for 1% allocation at price {price:.2f}")
+                    self.log(1, f"{self.Time.date()} SKIP {symbol.Value} — 1% allocation too small at price {price:.2f}")
                     self.to_buy.pop(symbol)
                     continue
 
