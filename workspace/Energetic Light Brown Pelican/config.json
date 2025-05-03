@@ -1,0 +1,21 @@
+{
+    "cloud-id": 22767250,
+    "algorithm-language": "Python",
+    "parameters": {
+        "bb_period": "30",
+        "bb_std_dev": "2",
+        "rsi_threshold": "25",
+        "bb_width_threshold_daily": "25",
+        "bb_width_threshold_minute": "2",
+        "rsi_period": "14",
+        "atr_period": "14",
+        "atr_tp_multiplier": "1.2",
+        "atr_sl_multiplier": "1.6",
+        "position_timeout_bars": "2",
+        "log_level": "1"
+    },
+    "description": "",
+    "organization-id": "9c2726f8cf057e5eb5c037ff8fdf4aa5",
+    "python-venv": 1,
+    "encrypted": false
+}

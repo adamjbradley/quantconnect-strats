@@ -1,0 +1,13 @@
+{
+    "cloud-id": 22765045,
+    "algorithm-language": "Python",
+    "parameters": {
+        "gapThreshold": "0.12",
+        "capTier": "micro, small, mid",
+        "logLevel": "1"
+    },
+    "description": "Gap Up Short Strategy",
+    "organization-id": "9c2726f8cf057e5eb5c037ff8fdf4aa5",
+    "python-venv": 1,
+    "encrypted": false
+}
