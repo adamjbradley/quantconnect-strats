@@ -1,118 +1,215 @@
 from AlgorithmImports import *
+import numpy as np
 
-class OvernightGapUpShort(QCAlgorithm):
+class ROCReboundStrategy(QCAlgorithm):
     def Initialize(self):
-        self.SetStartDate(2018, 1, 1)
-        self.SetEndDate(self.Time.date())
+        self.SetStartDate(2015, 1, 1)
+        self.SetEndDate(2026, 1, 1)
         self.SetCash(100000)
 
-        self.cap_tiers = [x.strip() for x in (self.GetParameter("capTiers") or "small").split(",")]
-        self.gap_threshold = float(self.GetParameter("gapThreshold") or 0.03)
-        self.log_level = int(self.GetParameter("logLevel") or 1)
-        self.volume_surge_threshold = float(self.GetParameter("volumeSurgeThreshold") or 1.5)
+        # Parameters
+        self.lookback = 14
+        self.volume_window = 20
+        self.max_holding_days = 15
+        self.trade_allocation_pct = 0.1
 
-        self.position_size = 0.1
-        self.daily_pnl = 0
-        self.total_trades = 0
-        self.total_pnl = 0
+        # Retrieve parameters
+        self.cap_tiers = [x.strip().lower() for x in (self.GetParameter("capTiers") or "micro, small, mid, large, mega").split(",")]
+        self.sector_tiers = [x.strip().lower() for x in (self.GetParameter("sectorTiers") or "basic materials, communication services, consumer cyclical, consumer defensive, consumer defensive, energy, financial services, industrial, real estate, technology, utilities").split(",")]
+        self.volume_surge_threshold = float(self.GetParameter("volumeSurgeThreshold") or 1)
 
-        self.spy = self.AddEquity("SPY", Resolution.Hour).Symbol
-        self.UniverseSettings.Resolution = Resolution.Hour
-        self.AddUniverse(self.CoarseSelectionFunction)
+        # Define market cap thresholds (in USD)
+        self.market_cap_thresholds = {
+            'micro': (0, 300e6),
+            'small': (300e6, 2e9),
+            'mid': (2e9, 10e9),
+            'large': (10e9, 200e9),
+            'mega': (200e9, float('inf'))
+        }
 
-        self.active_symbols = set()
-        self.stop_orders = {}
+        # Define sector name to MorningstarSectorCode mapping
+        self.sector_name_to_code = {
+            'basic materials': MorningstarSectorCode.BASIC_MATERIALS,
+            'communication services': MorningstarSectorCode.COMMUNICATION_SERVICES,
+            'consumer cyclical': MorningstarSectorCode.CONSUMER_CYCLICAL,
+            'consumer defensive': MorningstarSectorCode.CONSUMER_DEFENSIVE,
+            'energy': MorningstarSectorCode.ENERGY,
+            'financial services': MorningstarSectorCode.FINANCIAL_SERVICES,
+            'healthcare': MorningstarSectorCode.HEALTHCARE,
+            'industrials': MorningstarSectorCode.INDUSTRIALS,
+            'real estate': MorningstarSectorCode.REAL_ESTATE,
+            'technology': MorningstarSectorCode.TECHNOLOGY,
+            'utilities': MorningstarSectorCode.UTILITIES
+        }
 
-        self.Schedule.On(self.DateRules.EveryDay(), self.TimeRules.AfterMarketOpen(self.spy, 1), self.CheckOvernightGaps)
-        self.Schedule.On(self.DateRules.EveryDay(), self.TimeRules.BeforeMarketClose(self.spy, 1), self.ExitPositions)
+        # Log parameters
+        self.Log(f"Parameter: capTiers = {self.cap_tiers}")
+        self.Log(f"Parameter: sectorTiers = {self.sector_tiers}")
+        self.Log(f"Parameter: volumeSurgeThreshold = {self.volume_surge_threshold}")
+        
+        # Map sector names to codes
+        self.sector_codes = [self.sector_name_to_code[name] for name in self.sector_tiers if name in self.sector_name_to_code]
+
+        # Add SPY as the benchmark
+        self.AddEquity("SPY", Resolution.Daily)
+        self.SetBenchmark("SPY")
+
+        self.UniverseSettings.Resolution = Resolution.Daily
+        self.AddUniverse(self.CoarseSelectionFunction, self.FineSelectionFunction)
+    
+        self.symbol_data = {}
+        self.to_buy = {}  # {symbol: signal_date}
+        self.open_positions = {}  # {symbol: {entry, target, stop, entry_date}}
+
+        self.SetWarmUp(self.lookback + self.volume_window)
 
     def CoarseSelectionFunction(self, coarse):
-        return [x.Symbol for x in coarse if x.HasFundamentalData and x.Price > 2][:1000]
+        # Filter for securities with fundamental data
+        return [x.Symbol for x in coarse if x.HasFundamentalData]
 
     def FineSelectionFunction(self, fine):
-        fine = list(fine)
+        selected = []
+        for stock in fine:
+            # Market cap filter
+            market_cap = stock.MarketCap
+            cap_match = any(
+                self.market_cap_thresholds[tier][0] <= market_cap <= self.market_cap_thresholds[tier][1]
+                for tier in self.cap_tiers
+            )
 
-        caps = []
-        for tier in self.cap_tiers:
-            if tier == "micro":
-                caps.append((0, 3e8))
-            elif tier == "small":
-                caps.append((3e8, 2e9))
-            elif tier == "mid":
-                caps.append((2e9, 1e10))
-            elif tier == "large":
-                caps.append((1e10, float("inf")))
+            # Sector filter using MorningstarSectorCode
+            sector_code = stock.AssetClassification.MorningstarSectorCode
+            sector_match = sector_code in self.sector_codes
 
-        def match_cap(x):
-            return any(min_cap <= x.MarketCap <= max_cap for min_cap, max_cap in caps)
+            if cap_match and sector_match:
+                selected.append(stock.Symbol)
 
-        filtered = [x.Symbol for x in fine if match_cap(x) and x.DollarVolume > 1e5 and x.Price > 2][:500]
-        self.log(2, f"{self.Time.date()} Selected {len(fine)} fine symbols, {len(filtered)} match capTiers={','.join(self.cap_tiers)}")
-        return filtered
+        return selected
 
-    def log(self, level: int, message: str):
-        if self.log_level >= level:
-            self.Debug(message)
+    def OnSecuritiesChanged(self, changes):
+        for security in changes.AddedSecurities:
+            symbol = security.Symbol
+            if symbol not in self.symbol_data:
+                # Initialize symbol data
+                self.symbol_data[symbol] = SymbolData(self, symbol, self.lookback, self.volume_window)
 
-    def CheckOvernightGaps(self):
-        self.active_symbols.clear()
-        qualified_count = 0
+    def OnData(self, data):
+        if self.IsWarmingUp:
+            return
 
-        for symbol in self.ActiveSecurities.Keys:
-            history = self.History(symbol, 6, Resolution.Daily)
-            if history.empty or "volume" not in history.columns:
-                self.log(2, f"{symbol}: history missing or no volume")
+        for symbol, symbol_data in self.symbol_data.items():
+            if symbol in data and data[symbol] is not None:
+                symbol_data.update(data[symbol])
+
+        for symbol, symbol_data in self.symbol_data.items():
+            if symbol_data.is_ready():
+                roc_today = symbol_data.roc_today()
+                roc_yesterday = symbol_data.roc_yesterday()
+                roc_3days_ago = symbol_data.roc_3days_ago()
+                avg_volume = symbol_data.average_volume()
+                current_volume = symbol_data.current_volume()
+
+                deep_drop = roc_today < -15 and roc_today > -30
+                volume_surge = current_volume >= self.volume_surge_threshold * avg_volume
+
+                if deep_drop and roc_today > roc_3days_ago and roc_today > roc_yesterday and volume_surge:
+                    if not self.Portfolio[symbol].Invested and symbol not in self.to_buy and symbol not in self.open_positions:
+                        self.to_buy[symbol] = self.Time.date()
+
+        for symbol, signal_date in list(self.to_buy.items()):
+            if self.Time.date() <= signal_date:
                 continue
-            if history.empty or len(history.index.unique()) < 2:
-                self.log(2, f"{symbol}: insufficient history")
-                continue
 
-            prev_close = history.iloc[-2]["close"]
-            today_open = history.iloc[-1]["open"]
-            avg_volume = history.iloc[:-1]["volume"].mean()
-            today_volume = history.iloc[-1]["volume"]
-            gap = (today_open - prev_close) / prev_close
-
-            if gap >= self.gap_threshold:
-                if today_volume <= self.volume_surge_threshold * avg_volume:
-                    self.log(2, f"{symbol}: volume surge {today_volume:.0f} vs avg {avg_volume:.0f} below threshold")
+            if not self.Portfolio[symbol].Invested and self.Securities[symbol].IsTradable:
+                price = self.Securities[symbol].Price
+                if price is None or price <= 0:
+                    self.to_buy.pop(symbol)
                     continue
-                qty = self.CalculateOrderQuantity(symbol, -self.position_size)
-                ticket = self.MarketOrder(symbol, qty)
-                stop_price = self.Securities[symbol].Price * 1.01
-                stop = self.StopMarketOrder(symbol, -qty, stop_price)
-                self.stop_orders[symbol] = stop
-                self.log(1, f"Stop loss set at {stop_price:.2f} for {symbol}")
-                self.active_symbols.add(symbol)
-                qualified_count += 1
-                self.log(1, f"{self.Time} SHORT {symbol} @ {today_open:.2f}, Gap: {gap:.2%}")
-            else:
-                self.log(2, f"{symbol}: gap {gap:.2%} below threshold")
 
-        self.log(1, f"{self.Time.date()} Qualified gap-up symbols: {qualified_count}")
+                available_cash = self.Portfolio.Cash
+                max_alloc_cash = available_cash * self.trade_allocation_pct
+                quantity = int(max_alloc_cash / price)
 
-    def ExitPositions(self):
-        self.daily_pnl = 0
+                if quantity <= 0:
+                    self.to_buy.pop(symbol)
+                    continue
 
-        for symbol in list(self.active_symbols):
-            if self.Portfolio[symbol].Invested:
-                quantity = self.Portfolio[symbol].Quantity
-                entry_price = self.Portfolio[symbol].AveragePrice
-                exit_price = self.Securities[symbol].Price
-                pnl = (entry_price - exit_price) * quantity
+                try:
+                    self.MarketOrder(symbol, quantity)
+                except Exception as e:
+                    self.Debug(f"Order failed for {symbol.Value}: {e}")
+                finally:
+                    self.to_buy.pop(symbol)
 
-                self.daily_pnl += pnl
-                self.total_trades += 1
-                self.total_pnl += pnl
+        for symbol, pos in list(self.open_positions.items()):
+            price = self.Securities[symbol].Price
+            target = pos["target"]
+            stop = pos["stop"]
 
-                self.log(1, f"{self.Time} EXIT {symbol} @ {exit_price:.2f}, Entry={entry_price:.2f}, Qty={quantity}, PnL={pnl:.2f}")
+            if price >= target or price <= stop:
                 self.Liquidate(symbol)
-                if symbol in self.stop_orders:
-                    self.Transactions.CancelOrder(self.stop_orders[symbol].OrderId)
-                    self.stop_orders.pop(symbol)
+                self.open_positions.pop(symbol)
+            else:
+                holding_days = (self.Time.date() - pos["entry_date"]).days
+                if holding_days > self.max_holding_days:
+                    self.Liquidate(symbol)
+                    self.open_positions.pop(symbol)
 
-        self.log(1, f"{self.Time.date()} Total daily PnL: {self.daily_pnl:.2f}")
+    def OnOrderEvent(self, order_event: OrderEvent):
+        if order_event.Status != OrderStatus.Filled:
+            return
+
+        symbol = order_event.Symbol
+        if order_event.Direction != OrderDirection.Buy:
+            return
+
+        price = order_event.FillPrice
+        atr = self.symbol_data[symbol].atr
+        if not atr.IsReady:
+            return
+
+        atr_val = atr.Current.Value
+        target = price + atr_val
+        stop = price - 2.5 * atr_val
+
+        self.open_positions[symbol] = {
+            "entry": price,
+            "target": target,
+            "stop": stop,
+            "entry_date": self.Time.date()
+        }
 
     def OnEndOfAlgorithm(self):
-        self.log(1, f"FINAL SUMMARY: Trades={self.total_trades}, Total PnL={self.total_pnl:.2f}")
+        self.Liquidate()
 
+class SymbolData:
+    def __init__(self, algorithm, symbol, roc_lookback, volume_window):
+        self.symbol = symbol
+        self.algorithm = algorithm
+        self.roc_lookback = roc_lookback
+        self.volume_window = volume_window
+        self.roc_window = RollingWindow[float](roc_lookback + 5)
+        self.volume_window_data = RollingWindow[float](volume_window)
+        self.atr = algorithm.ATR(symbol, 14, MovingAverageType.Simple, Resolution.Daily)
+
+    def update(self, bar):
+        self.roc_window.Add(bar.Close)
+        self.volume_window_data.Add(bar.Volume)
+
+    def is_ready(self):
+        return self.roc_window.IsReady and self.volume_window_data.IsReady and self.atr.IsReady
+
+    def roc_today(self):
+        return ((self.roc_window[0] - self.roc_window[self.roc_lookback]) / self.roc_window[self.roc_lookback]) * 100
+
+    def roc_yesterday(self):
+        return ((self.roc_window[1] - self.roc_window[self.roc_lookback + 1]) / self.roc_window[self.roc_lookback + 1]) * 100
+
+    def roc_3days_ago(self):
+        return ((self.roc_window[3] - self.roc_window[self.roc_lookback + 3]) / self.roc_window[self.roc_lookback + 3]) * 100
+
+    def average_volume(self):
+        return np.mean([x for x in self.volume_window_data])
+
+    def current_volume(self):
+        return self.volume_window_data[0]

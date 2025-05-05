@@ -1,160 +1,138 @@
 from AlgorithmImports import *
-from Selection.ETFConstituentsUniverseSelectionModel import *
+import numpy as np
 
 class ROCReboundStrategy(QCAlgorithm):
     def Initialize(self):
-        self.SetStartDate(2024, 5, 5)
-        self.SetEndDate(2026, 5, 3)
+        self.SetStartDate(2015, 1, 1)
+        self.SetEndDate(2026, 1, 1)
         self.SetCash(100000)
+
+        # Parameters
         self.lookback = 14
+        self.volume_window = 20
+        self.max_holding_days = 15
+        self.trade_allocation_pct = 0.05        
 
-        self.log_level = 1  # 0 = Off, 1 = Key Events, 2 = Verbose
-        self.enforce_max_holding = True  # Feature flag: Set to False to disable time-based exits
-        self.max_holding_days = 15  # Feature flag: Max number of days to hold a position
-        self.trade_allocation_pct = 0.1  # Feature flag: percent of cash to allocate per trade
-        self.PlotROC = True  # Feature flag to plot ROC values for each symbol
+        # Retrieve parameters
+        self.cap_tiers = [x.strip().lower() for x in (self.GetParameter("capTiers") or "micro, small, mid, large, mega").split(",")]
+        self.sector_tiers = [x.strip().lower() for x in (self.GetParameter("sectorTiers") or "basic materials, communication services, consumer cyclical, consumer defensive, consumer defensive, energy, financial services, industrial, real estate, technology, utilities").split(",")]
+        self.volume_surge_threshold = float(self.GetParameter("volumeSurgeThreshold") or 1)
 
-        self.symbols = []
+        # Define market cap thresholds (in USD)
+        self.market_cap_thresholds = {
+            'micro': (0, 300e6),
+            'small': (300e6, 2e9),
+            'mid': (2e9, 10e9),
+            'large': (10e9, 200e9),
+            'mega': (200e9, float('inf'))
+        }
+
+        # Define sector name to MorningstarSectorCode mapping
+        self.sector_name_to_code = {
+            'basic materials': MorningstarSectorCode.BASIC_MATERIALS,
+            'communication services': MorningstarSectorCode.COMMUNICATION_SERVICES,
+            'consumer cyclical': MorningstarSectorCode.CONSUMER_CYCLICAL,
+            'consumer defensive': MorningstarSectorCode.CONSUMER_DEFENSIVE,
+            'energy': MorningstarSectorCode.ENERGY,
+            'financial services': MorningstarSectorCode.FINANCIAL_SERVICES,
+            'healthcare': MorningstarSectorCode.HEALTHCARE,
+            'industrials': MorningstarSectorCode.INDUSTRIALS,
+            'real estate': MorningstarSectorCode.REAL_ESTATE,
+            'technology': MorningstarSectorCode.TECHNOLOGY,
+            'utilities': MorningstarSectorCode.UTILITIES
+        }
+
+        # Map sector names to codes
+        self.sector_codes = [self.sector_name_to_code[name] for name in self.sector_tiers if name in self.sector_name_to_code]
+
+        # Add SPY as the benchmark
+        self.AddEquity("SPY", Resolution.Daily)
+        self.SetBenchmark("SPY")
+
+        self.UniverseSettings.Resolution = Resolution.Daily
+        self.AddUniverse(self.CoarseSelectionFunction, self.FineSelectionFunction)
+    
+        self.symbol_data = {}
         self.to_buy = {}  # {symbol: signal_date}
         self.open_positions = {}  # {symbol: {entry, target, stop, entry_date}}
-        self.atr_indicators = {}
 
-        #
-        self.AddUniverse(self.CoarseSelectionFunction)
-
-        #symbol = Symbol.create("SPY", SecurityType.EQUITY, Market.USA)
-        #self.AddUniverseSelection(ETFConstituentsUniverseSelectionModel(symbol))
-
-        self.vix = self.AddIndex("VIX", Resolution.Daily).Symbol
-
-        self.Schedule.On(self.DateRules.EveryDay(), self.TimeRules.At(10, 0), self.Evaluate)
-        self.SetWarmUp(self.lookback + 5, Resolution.DAILY)     
-
-    def OnSecuritiesChanged(self, changes):
-        for security in changes.AddedSecurities:            
-            self.log(2, f"Added: {security}")
-            try:
-                self.symbols.append(security.Symbol)
-            except Exception as e:
-                continue
-        
-        #for security in changes.RemovedSecurities:
-        #    self.log(1, f"Removed: {security}")
-        #    try:
-        #        self.symbols.remove(security.Symbol)
-        #    except Exception as e:
-        #        continue
-            
-    def log(self, level: int, message: str):
-        if self.log_level >= level:
-            self.Debug(message)
+        self.SetWarmUp(self.lookback + self.volume_window)
 
     def CoarseSelectionFunction(self, coarse):
-        selected = sorted(
-            [x for x in coarse if x.HasFundamentalData],
-            key=lambda x: -x.DollarVolume
-        )[:2000]
-        self.symbols = [x.Symbol for x in selected]
-        return self.symbols
+        # Filter for securities with fundamental data
+        return [x.Symbol for x in coarse if x.HasFundamentalData]
 
-    def SelectFine(self, algorithm, fine):
-        self.symbols = [x.Symbol for x in fine] 
-        return self.symbols
+    def FineSelectionFunction(self, fine):
+        selected = []
+        for stock in fine:
+            # Market cap filter
+            market_cap = stock.MarketCap
+            cap_match = any(
+                self.market_cap_thresholds[tier][0] <= market_cap <= self.market_cap_thresholds[tier][1]
+                for tier in self.cap_tiers
+            )
 
-    def Evaluate(self):
+            # Sector filter using MorningstarSectorCode
+            sector_code = stock.AssetClassification.MorningstarSectorCode
+            sector_match = sector_code in self.sector_codes
+
+            if cap_match and sector_match:
+                selected.append(stock.Symbol)
+
+        return selected
+
+    def OnSecuritiesChanged(self, changes):
+        for security in changes.AddedSecurities:
+            symbol = security.Symbol
+            if symbol not in self.symbol_data:
+                # Initialize symbol data
+                self.symbol_data[symbol] = SymbolData(self, symbol, self.lookback, self.volume_window)
+
+    def OnData(self, data):
         if self.IsWarmingUp:
             return
 
-        # Check if VIX data is available
-        if self.vix not in self.Securities or not self.Securities[self.vix].HasData:
-            self.Debug("VIX data not available.")
-            return
+        for symbol, symbol_data in self.symbol_data.items():
+            if symbol in data and data[symbol] is not None:
+                symbol_data.update(data[symbol])
 
-        vix_price = self.Securities[self.vix].Price
-        vix_threshold = 0  # Define your threshold
+        for symbol, symbol_data in self.symbol_data.items():
+            if symbol_data.is_ready():
+                roc_today = symbol_data.roc_today()
+                roc_yesterday = symbol_data.roc_yesterday()
+                roc_3days_ago = symbol_data.roc_3days_ago()
+                avg_volume = symbol_data.average_volume()
+                current_volume = symbol_data.current_volume()
 
-        if vix_price < vix_threshold:
-            self.Debug(f"VIX is below threshold ({vix_price} < {vix_threshold}). Skipping trade entry.")
-            return
+                deep_drop = roc_today < -15 and roc_today > -30
+                volume_surge = current_volume >= self.volume_surge_threshold * avg_volume
 
-        for symbol in self.symbols:
-            if not self.Securities.ContainsKey(symbol):
-                self.AddEquity(symbol.Value, Resolution.DAILY)
-            if symbol not in self.atr_indicators:
-                self.atr_indicators[symbol] = self.ATR(symbol, 14, MovingAverageType.Simple, Resolution.DAILY)
-
-            history = self.History(symbol, self.lookback + 4, Resolution.DAILY)
-            if history.empty or len(history) < self.lookback + 4:
-                self.log(2, f"{symbol.Value}: Not enough history")
-                continue
-
-            closes = history["close"]
-            close_today = closes.iloc[-1]
-            close_past = closes.iloc[-(self.lookback + 1)]
-            close_yest = closes.iloc[-2]
-            close_yest_past = closes.iloc[-(self.lookback + 2)]
-            close_3ago = closes.iloc[-4]
-            close_3ago_past = closes.iloc[-(self.lookback + 4)]
-
-            if close_past == 0 or close_yest_past == 0 or close_3ago_past == 0:
-                continue
-
-            roc_today = ((close_today - close_past) / close_past) * 100
-            roc_yesterday = ((close_yest - close_yest_past) / close_yest_past) * 100
-            roc_3days_ago = ((close_3ago - close_3ago_past) / close_3ago_past) * 100
-
-            if self.PlotROC and (symbol in self.to_buy or self.Portfolio[symbol].Invested):
-                plot_symbol = symbol.Value[:10]
-                self.Plot(plot_symbol, "ROC Today", roc_today)
-                self.Plot(plot_symbol, "ROC Yesterday", roc_yesterday)
-                self.Plot(plot_symbol, "ROC 3 Days Ago", roc_3days_ago)
-
-            deep_drop = roc_today < -15 and roc_today > -40
-
-            if deep_drop and roc_today > roc_3days_ago and roc_today > roc_yesterday:
-                if not self.Portfolio[symbol].Invested and symbol not in self.to_buy and symbol not in self.open_positions:
-                    self.log(1, f"{self.Time.date()} {symbol.Value} | ROC: {roc_today:.1f}>{roc_yesterday:.1f}, {roc_3days_ago:.1f}")
-                    self.to_buy[symbol] = self.Time.date()
-                    self.log(1, f"{self.Time.date()} SIGNAL {symbol.Value} — Buy scheduled for next day")
-
-    def OnData(self, data: Slice):
-        for symbol in list(self.open_positions.keys()):
-            if not self.Portfolio[symbol].Invested:
-                self.open_positions.pop(symbol)
+                if deep_drop and roc_today > roc_3days_ago and roc_today > roc_yesterday and volume_surge:
+                    if not self.Portfolio[symbol].Invested and symbol not in self.to_buy and symbol not in self.open_positions:
+                        self.to_buy[symbol] = self.Time.date()
 
         for symbol, signal_date in list(self.to_buy.items()):
             if self.Time.date() <= signal_date:
                 continue
 
             if not self.Portfolio[symbol].Invested and self.Securities[symbol].IsTradable:
-                atr = self.atr_indicators[symbol]
-
-                if not atr.IsReady:
-                    self.log(2, f"{symbol.Value}: ATR not ready")
-                    self.to_buy.pop(symbol)
-                    continue
-
                 price = self.Securities[symbol].Price
                 if price is None or price <= 0:
-                    self.log(1, f"{self.Time.date()} SKIP {symbol.Value} — Invalid or zero price")
                     self.to_buy.pop(symbol)
                     continue
 
                 available_cash = self.Portfolio.Cash
                 max_alloc_cash = available_cash * self.trade_allocation_pct
-                max_alloc_cash = 3000
                 quantity = int(max_alloc_cash / price)
 
                 if quantity <= 0:
-                    self.log(1, f"{self.Time.date()} SKIP {symbol.Value} — Not enough cash for allocation at price {price:.2f}")
                     self.to_buy.pop(symbol)
                     continue
 
                 try:
-                    ticket = self.MarketOrder(symbol, quantity)
-                    self.log(1, f"{self.Time.date()} ORDER PLACED {symbol.Value} for {quantity} shares | Awaiting fill")
+                    self.MarketOrder(symbol, quantity)
                 except Exception as e:
-                    self.log(1, f"{self.Time.date()} SKIP {symbol.Value} — Order failed: {e}")
+                    self.Debug(f"Order failed for {symbol.Value}: {e}")
                 finally:
                     self.to_buy.pop(symbol)
 
@@ -163,21 +141,13 @@ class ROCReboundStrategy(QCAlgorithm):
             target = pos["target"]
             stop = pos["stop"]
 
-            if price >= target:
+            if price >= target or price <= stop:
                 self.Liquidate(symbol)
-                self.log(1, f"{self.Time.date()} SELL {symbol.Value} at {price:.2f} | TAKE PROFIT ({target:.2f})")
                 self.open_positions.pop(symbol)
-
-            elif price <= stop:
-                self.Liquidate(symbol)
-                self.log(1, f"{self.Time.date()} SELL {symbol.Value} at {price:.2f} | STOP LOSS ({stop:.2f})")
-                self.open_positions.pop(symbol)
-
-            elif self.enforce_max_holding:
+            else:
                 holding_days = (self.Time.date() - pos["entry_date"]).days
                 if holding_days > self.max_holding_days:
                     self.Liquidate(symbol)
-                    self.log(1, f"{self.Time.date()} SELL {symbol.Value} | MAX HOLD ({holding_days} days)")
                     self.open_positions.pop(symbol)
 
     def OnOrderEvent(self, order_event: OrderEvent):
@@ -189,9 +159,8 @@ class ROCReboundStrategy(QCAlgorithm):
             return
 
         price = order_event.FillPrice
-        atr = self.atr_indicators[symbol]
+        atr = self.symbol_data[symbol].atr
         if not atr.IsReady:
-            self.log(1, f"{self.Time.date()} FILLED {symbol.Value} — ATR not ready, skipping open_positions")
             return
 
         atr_val = atr.Current.Value
@@ -205,7 +174,37 @@ class ROCReboundStrategy(QCAlgorithm):
             "entry_date": self.Time.date()
         }
 
-        self.log(1, f"{self.Time.date()} FILLED {symbol.Value} at {price:.2f} | TP: {target:.2f} | SL: {stop:.2f}")
-
     def OnEndOfAlgorithm(self):
         self.Liquidate()
+
+class SymbolData:
+    def __init__(self, algorithm, symbol, roc_lookback, volume_window):
+        self.symbol = symbol
+        self.algorithm = algorithm
+        self.roc_lookback = roc_lookback
+        self.volume_window = volume_window
+        self.roc_window = RollingWindow[float](roc_lookback + 5)
+        self.volume_window_data = RollingWindow[float](volume_window)
+        self.atr = algorithm.ATR(symbol, 14, MovingAverageType.Simple, Resolution.Daily)
+
+    def update(self, bar):
+        self.roc_window.Add(bar.Close)
+        self.volume_window_data.Add(bar.Volume)
+
+    def is_ready(self):
+        return self.roc_window.IsReady and self.volume_window_data.IsReady and self.atr.IsReady
+
+    def roc_today(self):
+        return ((self.roc_window[0] - self.roc_window[self.roc_lookback]) / self.roc_window[self.roc_lookback]) * 100
+
+    def roc_yesterday(self):
+        return ((self.roc_window[1] - self.roc_window[self.roc_lookback + 1]) / self.roc_window[self.roc_lookback + 1]) * 100
+
+    def roc_3days_ago(self):
+        return ((self.roc_window[3] - self.roc_window[self.roc_lookback + 3]) / self.roc_window[self.roc_lookback + 3]) * 100
+
+    def average_volume(self):
+        return np.mean([x for x in self.volume_window_data])
+
+    def current_volume(self):
+        return self.volume_window_data[0]
