@@ -18,7 +18,7 @@ class OvernightGapUpShort(QCAlgorithm):
 
         self.spy = self.AddEquity("SPY", Resolution.Hour).Symbol
         self.UniverseSettings.Resolution = Resolution.Hour
-        self.AddUniverse(self.CoarseSelectionFunction, self.FineSelectionFunction)
+        self.AddUniverse(self.CoarseSelectionFunction)
 
         self.active_symbols = set()
         self.stop_orders = {}
