@@ -2,9 +2,12 @@
     "cloud-id": 22725991,
     "algorithm-language": "Python",
     "parameters": {
-        "capTiers": "micro, small, mid, large, mega",
+        "capTiers": "micro, small, mid",
         "sectorTiers": "technology",
-        "volumeSurgeThreshold": "0.5"
+        "volumeSurgeThreshold": "0.5",
+        "roc_min": "15",
+        "roc_max": "30",
+        "vix_threshold": "1000"
     },
     "description": "https://www.youtube.com/watch?v=afbo3rnmaX0&amp;t=149s",
     "organization-id": "9c2726f8cf057e5eb5c037ff8fdf4aa5",

@@ -1,82 +1,67 @@
 from AlgorithmImports import *
 from symbol_data import SymbolData
-from utils import get_market_cap_thresholds, get_sector_name_to_code
+from utils import get_sector_codes, get_market_cap_thresholds
 
 class ROCReboundStrategy(QCAlgorithm):
     def Initialize(self):
-        # Set the start and end dates for the backtest
-        self.SetStartDate(2015, 1, 1)
-        self.SetEndDate(2026, 12, 31)
+        self.SetStartDate(2020, 1, 1)
+        self.SetEndDate(2020, 12, 31)
         self.SetCash(100000)
 
-        # Add SPY as the benchmark
         self.AddEquity("SPY", Resolution.Daily)
         self.SetBenchmark("SPY")
 
-        # Add VIX data
         self.vix = self.AddData(CBOE, "VIX", Resolution.Daily).Symbol
 
-        # Create a custom chart
-        vix_chart = Chart("VIX Chart", ChartType.Stacked)
-        vix_chart.AddSeries(Series("VIX Close", SeriesType.Line))
-        self.AddChart(vix_chart)
-
-        # Initialize parameters
         self.lookback = 14
         self.volume_window = 20
         self.max_holding_days = 15
         self.trade_allocation_pct = 0.1
         self.PlotROC = True
 
-        # Retrieve parameters
         cap_tiers_param = self.GetParameter("capTiers") or "small"
         self.cap_tiers = [x.strip().lower() for x in cap_tiers_param.split(",")]
 
         sector_tiers_param = self.GetParameter("sectorTiers") or "healthcare"
         self.sector_tiers = [x.strip().lower() for x in sector_tiers_param.split(",")]
 
-        self.volume_surge_threshold = float(self.GetParameter("volumeSurgeThreshold") or 0.5)
-        self.vix_threshold = float(self.GetParameter("vixThreshold") or 1000)
-        self.roc_min = float(self.GetParameter("rocMin") or -30)
+        self.volume_surge_threshold = float(self.GetParameter("volumeSurgeThreshold") or 1.5)
+        self.vix_threshold = float(self.GetParameter("vixThreshold") or 20)
+        self.roc_min = float(self.GetParameter("rocMin") or -40)
         self.roc_max = float(self.GetParameter("rocMax") or -15)
 
-        # Log parameters
-        self.Log(f"Parameter: capTiers = {cap_tiers_param}", level="debug")
-        self.Log(f"Parameter: sectorTiers = {sector_tiers_param}"level="debug")
-        self.Log(f"Parameter: volumeSurgeThreshold = {self.volume_surge_threshold}", level="debug")
-        self.Log(f"Parameter: vixThreshold = {self.vix_threshold}", level="debug")
-        self.Log(f"Parameter: rocMin = {self.roc_min}", level="debug")
-        self.Log(f"Parameter: rocMax = {self.roc_max}", level="debug")
+        self.Log(f"Parameter: capTiers = {cap_tiers_param}")
+        self.Log(f"Parameter: sectorTiers = {sector_tiers_param}")
+        self.Log(f"Parameter: volumeSurgeThreshold = {self.volume_surge_threshold}")
+        self.Log(f"Parameter: vixThreshold = {self.vix_threshold}")
+        self.Log(f"Parameter: rocMin = {self.roc_min}")
+        self.Log(f"Parameter: rocMax = {self.roc_max}")
 
-        # Load market cap thresholds and sector codes from utils
         self.market_cap_thresholds = get_market_cap_thresholds()
-        sector_name_to_code = get_sector_name_to_code()
-        self.sector_codes = [sector_name_to_code[name] for name in self.sector_tiers if name in sector_name_to_code]
+        self.sector_name_to_code = get_sector_codes()
+        self.sector_codes = [self.sector_name_to_code[name] for name in self.sector_tiers if name in self.sector_name_to_code]
 
         self.UniverseSettings.Resolution = Resolution.Daily
         self.AddUniverse(self.CoarseSelectionFunction, self.FineSelectionFunction)
 
         self.symbol_data = {}
-        self.to_buy = {}  # {symbol: signal_date}
-        self.open_positions = {}  # {symbol: {entry, target, stop, entry_date}}
+        self.to_buy = {}
+        self.open_positions = {}
 
         self.SetWarmUp(self.lookback + self.volume_window)
 
     def CoarseSelectionFunction(self, coarse):
-        # Filter for securities with fundamental data
         return [x.Symbol for x in coarse if x.HasFundamentalData]
 
     def FineSelectionFunction(self, fine):
         selected = []
         for stock in fine:
-            # Market cap filter
             market_cap = stock.MarketCap
             cap_match = any(
                 self.market_cap_thresholds[tier][0] <= market_cap <= self.market_cap_thresholds[tier][1]
                 for tier in self.cap_tiers
             )
 
-            # Sector filter using MorningstarSectorCode
             sector_code = stock.AssetClassification.MorningstarSectorCode
             sector_match = sector_code in self.sector_codes
 
@@ -89,20 +74,17 @@ class ROCReboundStrategy(QCAlgorithm):
         for security in changes.AddedSecurities:
             symbol = security.Symbol
             if symbol not in self.symbol_data:
-                # Initialize symbol data
                 self.symbol_data[symbol] = SymbolData(self, symbol, self.lookback, self.volume_window)
 
     def OnData(self, data):
         if self.IsWarmingUp:
             return
 
-        # Check VIX level
         if self.vix in data and data[self.vix] is not None:
             current_vix = data[self.vix].Close
-            self.Plot("VIX Chart", "VIX Close", current_vix)
             if current_vix > self.vix_threshold:
                 self.Debug(f"High VIX: {current_vix}")
-                return  # Skip trading in high volatility
+                return
             else:
                 self.Debug(f"Normal VIX: {current_vix}")
 
@@ -118,7 +100,11 @@ class ROCReboundStrategy(QCAlgorithm):
                 avg_volume = symbol_data.average_volume()
                 current_volume = symbol_data.current_volume()
 
-                # Apply ROC range filter
+                if self.PlotROC:
+                    self.Plot(symbol.Value, "ROC Today", roc_today)
+                    self.Plot(symbol.Value, "ROC Yesterday", roc_yesterday)
+                    self.Plot(symbol.Value, "ROC 3 Days Ago", roc_3days_ago)
+
                 deep_drop = self.roc_min <= roc_today <= self.roc_max
                 volume_surge = current_volume >= self.volume_surge_threshold * avg_volume
 
