@@ -7,7 +7,7 @@
         "volumeSurgeThreshold": "0.5",
         "roc_min": "15",
         "roc_max": "30",
-        "vix_threshold": "1000",
+        "vix_threshold": "25",
         "volume_window": "14",
         "max_holding_days": "14",
         "trade_allocation_pct": "0.1",
@@ -17,5 +17,6 @@
     "description": "https://www.youtube.com/watch?v=afbo3rnmaX0&amp;t=149s",
     "organization-id": "9c2726f8cf057e5eb5c037ff8fdf4aa5",
     "python-venv": 1,
-    "encrypted": false
+    "encrypted": false,
+    "deployment-target": "Cloud Platform"
 }
