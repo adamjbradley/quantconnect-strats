@@ -29,17 +29,3 @@ def get_sector_name_to_code():
         'technology': MorningstarSectorCode.TECHNOLOGY,
         'utilities': MorningstarSectorCode.UTILITIES
     }
-
-def log(self, message, level="info"):
-    """
-    Custom logging method to handle different log levels.
-    Levels: 'debug', 'info', 'error'
-    """
-    if level == "debug":
-        self.Debug(message)
-    elif level == "info":
-        self.Log(message)
-    elif level == "error":
-        self.Error(message)
-    else:
-        self.Log(message)  # Default to info level
