@@ -37,7 +37,7 @@ class ROCReboundStrategy(QCAlgorithm):
         self.vix_threshold = float(self.get_parameter("vixThreshold") or 25)
         self.roc_min = float(self.get_parameter("rocMin") or -30)
         self.roc_max = float(self.get_parameter("rocMax") or -15)
-        self.lookback = int(self.get_parameter("lookback") or 14)
+        self.roc_lookback = int(self.get_parameter("roc_lookback") or 14)
         self.volume_window = int(self.get_parameter("volume_window") or 14)
         self.max_holding_days = int(self.get_parameter("max_holding_days") or 15)
         self.trade_allocation_pct = float(self.get_parameter("trade_allocation_pct") or 0.1)
@@ -50,7 +50,9 @@ class ROCReboundStrategy(QCAlgorithm):
         self.min_open_positions_cap = int(self.get_parameter("min_open_positions_cap") or 5)
         self.max_open_positions_cap = int(self.get_parameter("max_open_positions_cap") or 10)
         self.volatility_scaling_enabled = bool(self.get_parameter("volatility_scaling_enabled") or True)
-        
+        self.enable_volume_surge = self.get_parameter("enable_volume_surge") or "true"
+        self.allow_position_reduction = bool(self.get_parameter("allow_position_reduction") or False)
+
         # Log parameters
         self.logger.log(f"Parameter: capTiers = {cap_tiers_param}", level="debug")
         self.logger.log(f"Parameter: sectorTiers = {sector_tiers_param}", level="debug")
@@ -58,7 +60,7 @@ class ROCReboundStrategy(QCAlgorithm):
         self.logger.log(f"Parameter: vixThreshold = {self.vix_threshold}", level="debug")
         self.logger.log(f"Parameter: rocMin = {self.roc_min}", level="debug")
         self.logger.log(f"Parameter: rocMax = {self.roc_max}", level="debug")
-        self.logger.log(f"Parameter: lookback: {self.lookback}", level="debug")
+        self.logger.log(f"Parameter: roc_lookback: {self.roc_lookback}", level="debug")
         self.logger.log(f"Parameter: volume_window: {self.volume_window}", level="debug")
         self.logger.log(f"Parameter: max_holding_days: {self.max_holding_days}", level="debug")
         self.logger.log(f"Parameter: trade_allocation_pct: {self.trade_allocation_pct}", level="debug")
@@ -68,6 +70,8 @@ class ROCReboundStrategy(QCAlgorithm):
         self.logger.log(f"Parameter: max_open_positions_cap = {self.min_open_positions_cap}", level="debug")
         self.logger.log(f"Parameter: min_open_positions_cap = {self.min_open_positions_cap}", level="debug")
         self.logger.log(f"Parameter: volatility_scaling_enabled = {self.volatility_scaling_enabled}", level="debug")
+        self.logger.log(f"Parameter: enable_volume_surge = {self.enable_volume_surge}", level="debug")
+        self.logger.log(f"Parameter: allow_position_reduction = {self.allow_position_reduction}", level="debug")
 
         # Load market cap thresholds and sector codes from utils
         self.market_cap_thresholds = get_market_cap_thresholds()
@@ -94,7 +98,7 @@ class ROCReboundStrategy(QCAlgorithm):
         self.Schedule.On(self.DateRules.EveryDay(), self.TimeRules.AfterMarketOpen("SPY", 1), self.ResetDailyLossTracking)
         self.Schedule.On(self.DateRules.EveryDay(), self.TimeRules.AfterMarketOpen("SPY", 5), self.RebalanceMaxOpenPositions)
 
-        self.set_warm_up(self.lookback + self.volume_window, Resolution.DAILY)
+        self.set_warm_up(self.roc_lookback + self.volume_window, Resolution.DAILY)
 
     def CoarseSelectionFunction(self, coarse):
         # Filter for securities with fundamental data
@@ -134,7 +138,7 @@ class ROCReboundStrategy(QCAlgorithm):
                 self.etf_constituents.add(symbol)
 
             if symbol not in self.symbol_data:
-                self.symbol_data[symbol] = SymbolData(self, symbol, self.lookback, self.volume_window)
+                self.symbol_data[symbol] = SymbolData(self, symbol, self.roc_lookback, self.volume_window)
 
         for security in changes.RemovedSecurities:
             symbol = security.Symbol
@@ -150,7 +154,7 @@ class ROCReboundStrategy(QCAlgorithm):
         if self.is_warming_up:    
             return
 
-
+        # Manage trade exits
         for symbol, pos in list(self.open_positions.items()):
             price = self.securities[symbol].price
             target = pos["target"]
@@ -164,8 +168,6 @@ class ROCReboundStrategy(QCAlgorithm):
                 if holding_days > self.max_holding_days:
                     self.liquidate(symbol)
                     self.open_positions.pop(symbol)
-
-
 
         # Check if trading is halted for the day
         if self.trading_halted_today:
@@ -205,8 +207,11 @@ class ROCReboundStrategy(QCAlgorithm):
 
                 # Apply ROC range filter
                 deep_drop = self.roc_min <= roc_today <= self.roc_max
-                volume_surge = current_volume >= self.volume_surge_threshold * avg_volume
 
+                # Apply Volume surge filter                
+                volume_surge = not self.enable_volume_surge or current_volume >= self.volume_surge_threshold * avg_volume
+
+                # ROC Strategy!
                 if deep_drop and roc_today > roc_3days_ago and roc_today > roc_yesterday and volume_surge:
                     if not self.portfolio[symbol].invested and symbol not in self.to_buy and symbol not in self.open_positions:
                         self.to_buy[symbol] = self.time.date()
@@ -303,14 +308,13 @@ class ROCReboundStrategy(QCAlgorithm):
         )
         return sorted_reqs[:2]  # Only allow 2 smallest losers to be liquidated
     
-
     def RebalanceMaxOpenPositions(self):
         margin_pct = self.Portfolio.MarginRemaining / self.Portfolio.TotalPortfolioValue if self.Portfolio.TotalPortfolioValue > 0 else 0
 
-        # Base scaling: more margin, more positions
+        # Base scaling: more margin → more allowed positions
         scaled_by_margin = int(self.min_open_positions_cap + (self.max_open_positions_cap - self.min_open_positions_cap) * margin_pct)
 
-        # Optional: adjust based on VIX regime
+        # Adjust based on VIX regime
         if self.volatility_scaling_enabled and self.vix in self.Securities and self.Securities[self.vix].HasData:
             vix_level = self.Securities[self.vix].Price
             if vix_level > 30:
@@ -321,6 +325,23 @@ class ROCReboundStrategy(QCAlgorithm):
                 volatility_factor = 1.0
             scaled_by_margin = int(scaled_by_margin * volatility_factor)
 
-        # Bound within min and max
-        self.max_open_positions = max(self.min_open_positions_cap, min(scaled_by_margin, self.max_open_positions_cap))
-        self.logger.log(f"[{self.Time}] Rebalanced max_open_positions to {self.max_open_positions}", level="info")
+        # Bound and apply
+        new_cap = max(self.min_open_positions_cap, min(scaled_by_margin, self.max_open_positions_cap))
+        self.logger.log(f"[{self.Time}] Rebalanced max_open_positions from {self.max_open_positions} to {new_cap}", level="info")
+        self.max_open_positions = new_cap
+
+        # Optional forced liquidation if over capacity
+        if len(self.open_positions) > self.max_open_positions:
+            excess = len(self.open_positions) - self.max_open_positions
+            self.logger.log(f"[{self.Time}] Over max_open_positions. Reducing by closing {excess} positions.", level="info")
+
+            # Close least profitable positions first
+            sorted_positions = sorted(
+                self.open_positions.items(),
+                key=lambda kv: self.Portfolio[kv[0]].UnrealizedProfit
+            )
+
+            for symbol, _ in sorted_positions[:excess]:
+                self.Liquidate(symbol)
+                self.logger.log(f"Force-closed {symbol.Value} to reduce open positions.", level="info")
+                self.open_positions.pop(symbol)
