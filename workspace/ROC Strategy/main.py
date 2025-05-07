@@ -299,6 +299,7 @@ class ROCReboundStrategy(QCAlgorithm):
             self.Liquidate(symbol)
             #self.logger.log(f"Preemptively liquidated {symbol.Value} due to margin risk.")
 
+
     # Review and adjust liquidation orders in response to a margin call. Liquidate
     def on_margin_call(self, requests) -> list[SubmitOrderRequest]: 
         self.logger.log("Margin Call Triggered. Liquidating all losing positions.", level="error")
