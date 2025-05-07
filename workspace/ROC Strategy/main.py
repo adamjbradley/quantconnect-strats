@@ -345,7 +345,24 @@ class ROCReboundStrategy(QCAlgorithm):
                 key=lambda kv: self.Portfolio[kv[0]].UnrealizedProfit
             )
 
+<<<<<<< HEAD
+    def custom_log(self, message, level="info"):
+        """
+        Custom logging method to handle different log levels.
+        Levels: 'debug', 'info', 'error'
+        """
+        if level == "debug":
+            self.debug(message)
+        elif level == "info":
+            self.log(message)
+        elif level == "error":
+            self.error(message)
+        else:
+            self.log(message)  # Default to info level
+
+=======
             for symbol, _ in sorted_positions[:excess]:
                 self.Liquidate(symbol)
                 #self.logger.log(f"Force-closed {symbol.Value} to reduce open positions.", level="info")
                 self.open_positions.pop(symbol)
+>>>>>>> 669bce4b586142a48a0a899557818c7be59efdea
