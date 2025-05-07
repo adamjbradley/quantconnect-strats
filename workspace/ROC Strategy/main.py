@@ -188,7 +188,7 @@ class ROCReboundStrategy(QCAlgorithm):
         # Check VIX level
         if self.vix in data and data[self.vix] is not None:
             current_vix = data[self.vix].Close            
-            self.plot("Chart Name", "Series Name", current_vix)
+            self.plot("VIX Chart", "VIX Close", current_vix)
             if current_vix > self.vix_threshold:
                 self.logger.log(f"High VIX: {current_vix}")
                 return  # Skip trading in high volatility
