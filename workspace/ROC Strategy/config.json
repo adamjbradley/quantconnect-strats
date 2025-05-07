@@ -13,12 +13,13 @@
         "trade_allocation_pct": "0.1",
         "atr_stop_loss_multiplier": "2.5",
         "atr_take_profit_multiplier": "1.0",
-        "max_open_positions_cap": "100",
+        "max_open_positions": "100",
         "max_daily_loss_pct": "0.01",
-        "universe_mode": "etf",
-        "etf_symbol": "SPY",
+        "universe_mode": "top1000",
+        "etf_symbol": "100",
         "min_open_positions_cap": "5",
-        "volatility_scaling_enabled": true 
+        "max_open_positions_cap": "100",
+        "volatility_scaling_enabled": "True"
     },
     "description": "https://www.youtube.com/watch?v=afbo3rnmaX0&amp;t=149s",
     "organization-id": "9c2726f8cf057e5eb5c037ff8fdf4aa5",

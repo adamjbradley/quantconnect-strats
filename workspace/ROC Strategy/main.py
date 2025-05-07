@@ -2,13 +2,17 @@ from AlgorithmImports import *
 from symbol_data import SymbolData
 from utils import get_market_cap_thresholds, get_sector_name_to_code
 from ETFConstituentsUniverseSelectionModel import ETFConstituentsUniverseSelectionModel
+from logger import LoggerMixin
 
 class ROCReboundStrategy(QCAlgorithm):
     def Initialize(self):
         # Set the start and end dates for the backtest
-        self.set_start_date(2020, 1, 1)
+        self.set_start_date(2015, 1, 1)
         self.set_end_date(2025, 1, 1)
         self.set_cash(100000)
+
+        self.logger = LoggerMixin(self)
+        self.logger.log("Logger initialized", level="debug")
 
         # Add SPY as the benchmark
         self.add_equity("SPY", Resolution.DAILY)
@@ -44,34 +48,34 @@ class ROCReboundStrategy(QCAlgorithm):
         self.universe_mode = self.get_parameter("universe_mode") or "etf"  # Options: "etf" or "top1000"
         self.etf_symbol = self.get_parameter("etf_symbol") or "SPY"
         self.min_open_positions_cap = int(self.get_parameter("min_open_positions_cap") or 5)
-        self.volatility_scaling_enabled = int(self.get_parameter("volatility_scaling_enabled") or True)
-
+        self.max_open_positions_cap = int(self.get_parameter("max_open_positions_cap") or 10)
+        self.volatility_scaling_enabled = bool(self.get_parameter("volatility_scaling_enabled") or True)
+        
         # Log parameters
-        self.custom_log(f"Parameter: capTiers = {cap_tiers_param}", level="debug")
-        self.custom_log(f"Parameter: sectorTiers = {sector_tiers_param}", level="debug")
-        self.custom_log(f"Parameter: volumeSurgeThreshold = {self.volume_surge_threshold}", level="debug")
-        self.custom_log(f"Parameter: vixThreshold = {self.vix_threshold}", level="debug")
-        self.custom_log(f"Parameter: rocMin = {self.roc_min}", level="debug")
-        self.custom_log(f"Parameter: rocMax = {self.roc_max}", level="debug")
-        self.custom_log(f"Parameter: lookback: {self.lookback}", level="debug")
-        self.custom_log(f"Parameter: volume_window: {self.volume_window}", level="debug")
-        self.custom_log(f"Parameter: max_holding_days: {self.max_holding_days}", level="debug")
-        self.custom_log(f"Parameter: trade_allocation_pct: {self.trade_allocation_pct}", level="debug")
-        self.custom_log(f"Parameter: min_open_positions_cap = {self.min_open_positions_cap}", level="debug")
-        self.custom_log(f"Parameter: max_daily_loss_pct = {self.max_daily_loss_pct}", level="debug")
-        self.custom_log(f"Parameter: universe_mode = {self.universe_mode}", level="debug")
-        self.custom_log(f"Parameter: etf_symbol = {self.etf_symbol}", level="debug")
-        self.custom_log(f"Parameter: min_open_positions_cap = {self.min_open_positions_cap}", level="debug")
-        self.custom_log(f"Parameter: volatility_scaling_enabled = {self.volatility_scaling_enabled}", level="debug")
+        self.logger.log(f"Parameter: capTiers = {cap_tiers_param}", level="debug")
+        self.logger.log(f"Parameter: sectorTiers = {sector_tiers_param}", level="debug")
+        self.logger.log(f"Parameter: volumeSurgeThreshold = {self.volume_surge_threshold}", level="debug")
+        self.logger.log(f"Parameter: vixThreshold = {self.vix_threshold}", level="debug")
+        self.logger.log(f"Parameter: rocMin = {self.roc_min}", level="debug")
+        self.logger.log(f"Parameter: rocMax = {self.roc_max}", level="debug")
+        self.logger.log(f"Parameter: lookback: {self.lookback}", level="debug")
+        self.logger.log(f"Parameter: volume_window: {self.volume_window}", level="debug")
+        self.logger.log(f"Parameter: max_holding_days: {self.max_holding_days}", level="debug")
+        self.logger.log(f"Parameter: trade_allocation_pct: {self.trade_allocation_pct}", level="debug")
+        self.logger.log(f"Parameter: max_daily_loss_pct = {self.max_daily_loss_pct}", level="debug")
+        self.logger.log(f"Parameter: universe_mode = {self.universe_mode}", level="debug")
+        self.logger.log(f"Parameter: etf_symbol = {self.etf_symbol}", level="debug")
+        self.logger.log(f"Parameter: max_open_positions_cap = {self.min_open_positions_cap}", level="debug")
+        self.logger.log(f"Parameter: min_open_positions_cap = {self.min_open_positions_cap}", level="debug")
+        self.logger.log(f"Parameter: volatility_scaling_enabled = {self.volatility_scaling_enabled}", level="debug")
 
         # Load market cap thresholds and sector codes from utils
         self.market_cap_thresholds = get_market_cap_thresholds()
         sector_name_to_code = get_sector_name_to_code()
         self.sector_codes = [sector_name_to_code[name] for name in self.sector_tiers if name in sector_name_to_code]
        
+        # Universe related matters
         self.universe_settings.resolution = Resolution.DAILY
-        self.universe_settings.asynchronous = True
-        
         if self.universe_mode == "etf":
             self.AddUniverseSelection(ETFConstituentsUniverseSelectionModel(self.etf_symbol, self.universe_settings, self._etf_constituents_filter))
         else:
@@ -114,7 +118,7 @@ class ROCReboundStrategy(QCAlgorithm):
                 selected.append(stock.Symbol)
 
         return selected
-    
+
     def _etf_constituents_filter(self, constituents: list[ETFConstituentUniverse]) -> list[Symbol]:
         # Select the 10 largest Equities in the ETF.
         selected = sorted(
@@ -123,24 +127,24 @@ class ROCReboundStrategy(QCAlgorithm):
         )[:10000]
         return [c.symbol for c in selected]
 
-def OnSecuritiesChanged(self, changes):
-    for security in changes.AddedSecurities:
-        symbol = security.Symbol
-        if self.universe_mode == "etf":
-            self.etf_constituents.add(symbol)
+    def OnSecuritiesChanged(self, changes):
+        for security in changes.AddedSecurities:
+            symbol = security.Symbol
+            if self.universe_mode == "etf":
+                self.etf_constituents.add(symbol)
 
-        if symbol not in self.symbol_data:
-            self.symbol_data[symbol] = SymbolData(self, symbol, self.lookback, self.volume_window)
+            if symbol not in self.symbol_data:
+                self.symbol_data[symbol] = SymbolData(self, symbol, self.lookback, self.volume_window)
 
-    for security in changes.RemovedSecurities:
-        symbol = security.Symbol
-        if symbol in self.symbol_data:
-            del self.symbol_data[symbol]
-        if symbol in self.open_positions:
-            self.Liquidate(symbol)
-            self.open_positions.pop(symbol)
-        if self.universe_mode == "etf" and symbol in self.etf_constituents:
-            self.etf_constituents.remove(symbol)
+        for security in changes.RemovedSecurities:
+            symbol = security.Symbol
+            if symbol in self.symbol_data:
+                del self.symbol_data[symbol]
+            if symbol in self.open_positions:
+                self.Liquidate(symbol)
+                self.open_positions.pop(symbol)
+            if self.universe_mode == "etf" and symbol in self.etf_constituents:
+                self.etf_constituents.remove(symbol)
 
     def OnData(self, data):
         if self.is_warming_up:    
@@ -184,7 +188,7 @@ def OnSecuritiesChanged(self, changes):
             current_vix = data[self.vix].Close            
             self.plot("Chart Name", "Series Name", current_vix)
             if current_vix > self.vix_threshold:
-                self.custom_log(f"High VIX: {current_vix}")
+                self.logger.log(f"High VIX: {current_vix}")
                 return  # Skip trading in high volatility
 
         for symbol, symbol_data in self.symbol_data.items():
@@ -214,8 +218,7 @@ def OnSecuritiesChanged(self, changes):
             if (not self.portfolio[symbol].invested and 
                 self.securities[symbol].is_tradable and 
                 len(self.open_positions) < self.max_open_positions):
-                
-                
+                                
                 price = self.securities[symbol].price
                 if price is None or price <= 0:
                     self.to_buy.pop(symbol)
@@ -232,12 +235,12 @@ def OnSecuritiesChanged(self, changes):
                 try:
                     self.market_order(symbol, quantity)
                 except Exception as e:
-                    self.custom_log(f"Order failed for {symbol.Value}: {e}")
+                    self.logger.log(f"Order failed for {symbol.Value}: {e}")
                 finally:
                     self.to_buy.pop(symbol)
             else:
                 if len(self.open_positions) >= self.max_open_positions:
-                    self.custom_log(f"Max open positions reached. Skipping {symbol}", level="debug")
+                    self.logger.log(f"Max open positions reached. Skipping {symbol}", level="debug")
 
 
     def OnOrderEvent(self, order_event: OrderEvent):
@@ -250,9 +253,9 @@ def OnSecuritiesChanged(self, changes):
 
         price = order_event.fill_price
 
-        # 🔒 Safe access
+        # Safe access
         if symbol not in self.symbol_data:
-            self.custom_log(f"OrderEvent received for unknown symbol: {symbol}", level="debug")
+            self.logger.log(f"OrderEvent received for unknown symbol: {symbol}", level="debug")
             return
 
         atr = self.symbol_data[symbol].atr
@@ -279,7 +282,7 @@ def OnSecuritiesChanged(self, changes):
 
     # Track when remaining margin is low.
     def on_margin_call_warning(self) -> None:
-        self.custom_log("⚠️ Margin Call Warning Triggered!", level="error")
+        self.logger.log("⚠️ Margin Call Warning Triggered!", level="error")
         
         # Optional: start liquidating smallest winners or highest-risk trades
         sorted_by_risk = sorted(
@@ -288,11 +291,11 @@ def OnSecuritiesChanged(self, changes):
         )
         for symbol, _ in sorted_by_risk[:3]:  # Just an example: close top 3 risky positions
             self.Liquidate(symbol)
-            self.custom_log(f"Preemptively liquidated {symbol.Value} due to margin risk.")
+            self.logger.log(f"Preemptively liquidated {symbol.Value} due to margin risk.")
 
     # Review and adjust liquidation orders in response to a margin call.
     def on_margin_call(self, requests) -> list[SubmitOrderRequest]: 
-        self.custom_log("Margin Call Triggered. Responding with custom liquidation.", level="error")
+        self.logger.log("Margin Call Triggered. Responding with custom liquidation.", level="error")
 
         # Example: sort by least profitable and return those first
         sorted_reqs = sorted(
@@ -320,18 +323,4 @@ def OnSecuritiesChanged(self, changes):
 
         # Bound within min and max
         self.max_open_positions = max(self.min_open_positions_cap, min(scaled_by_margin, self.max_open_positions_cap))
-        self.custom_log(f"[{self.Time}] Rebalanced max_open_positions to {self.max_open_positions}", level="info")
-
-    def custom_log(self, message, level="info"):
-        """
-        Custom logging method to handle different log levels.
-        Levels: 'debug', 'info', 'error'
-        """
-        if level == "debug":
-            self.debug(message)
-        elif level == "info":
-            self.log(message)
-        elif level == "error":
-            self.error(message)
-        else:
-            self.log(message)  # Default to info level
+        self.logger.log(f"[{self.Time}] Rebalanced max_open_positions to {self.max_open_positions}", level="info")
