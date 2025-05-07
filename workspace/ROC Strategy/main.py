@@ -182,15 +182,14 @@ class ROCReboundStrategy(QCAlgorithm):
         if loss_pct >= self.max_daily_loss_pct:
             self.Liquidate()
             self.trading_halted_today = True
-            self.Debug(f"Maximum daily loss exceeded: {loss_pct:.2%}. Trading halted for the day.")
+            #self.Debug(f"Maximum daily loss exceeded: {loss_pct:.2%}. Trading halted for the day.")
             return
 
         # Check VIX level
         if self.vix in data and data[self.vix] is not None:
             current_vix = data[self.vix].Close            
             self.plot("VIX Chart", "VIX Close", current_vix)
-            if current_vix > self.vix_threshold:
-                self.logger.log(f"High VIX: {current_vix}")
+            if current_vix > self.vix_threshold:                
                 return  # Skip trading in high volatility
 
         for symbol, symbol_data in self.symbol_data.items():
@@ -229,11 +228,12 @@ class ROCReboundStrategy(QCAlgorithm):
                     self.to_buy.pop(symbol)
                     continue
 
-                available_cash = self.portfolio.cash
-                max_alloc_cash = available_cash * self.trade_allocation_pct
-                quantity = int(max_alloc_cash / price)
+                # Ask the margin model how much buying power is available                
+                price = self.Securities[symbol].Price
+                quantity = self.CalculateOrderQuantity(symbol, self.trade_allocation_pct)               
 
                 if quantity <= 0:
+                    #self.logger.log(f"Skipping {symbol.Value}: insufficient buying power {price:.2f})", level="debug")
                     self.to_buy.pop(symbol)
                     continue
 
@@ -245,7 +245,8 @@ class ROCReboundStrategy(QCAlgorithm):
                     self.to_buy.pop(symbol)
             else:
                 if len(self.open_positions) >= self.max_open_positions:
-                    self.logger.log(f"Max open positions reached. Skipping {symbol}", level="debug")
+                    #self.logger.log(f"Max open positions reached. Skipping {symbol}", level="debug")
+                    continue
 
 
     def OnOrderEvent(self, order_event: OrderEvent):
@@ -296,7 +297,7 @@ class ROCReboundStrategy(QCAlgorithm):
         )
         for symbol, _ in sorted_by_risk[:3]:  # Just an example: close top 3 risky positions
             self.Liquidate(symbol)
-            self.logger.log(f"Preemptively liquidated {symbol.Value} due to margin risk.")
+            #self.logger.log(f"Preemptively liquidated {symbol.Value} due to margin risk.")
 
     # Review and adjust liquidation orders in response to a margin call.
     def on_margin_call(self, requests) -> list[SubmitOrderRequest]: 
@@ -327,13 +328,13 @@ class ROCReboundStrategy(QCAlgorithm):
 
         # Bound and apply
         new_cap = max(self.min_open_positions_cap, min(scaled_by_margin, self.max_open_positions_cap))
-        self.logger.log(f"[{self.Time}] Rebalanced max_open_positions from {self.max_open_positions} to {new_cap}", level="info")
+        #self.logger.log(f"[{self.Time}] Rebalanced max_open_positions from {self.max_open_positions} to {new_cap}", level="info")
         self.max_open_positions = new_cap
 
         # Optional forced liquidation if over capacity
         if len(self.open_positions) > self.max_open_positions:
             excess = len(self.open_positions) - self.max_open_positions
-            self.logger.log(f"[{self.Time}] Over max_open_positions. Reducing by closing {excess} positions.", level="info")
+            #self.logger.log(f"[{self.Time}] Over max_open_positions. Reducing by closing {excess} positions.", level="info")
 
             # Close least profitable positions first
             sorted_positions = sorted(
@@ -343,5 +344,5 @@ class ROCReboundStrategy(QCAlgorithm):
 
             for symbol, _ in sorted_positions[:excess]:
                 self.Liquidate(symbol)
-                self.logger.log(f"Force-closed {symbol.Value} to reduce open positions.", level="info")
+                #self.logger.log(f"Force-closed {symbol.Value} to reduce open positions.", level="info")
                 self.open_positions.pop(symbol)
