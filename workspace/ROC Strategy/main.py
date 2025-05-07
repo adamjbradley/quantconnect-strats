@@ -296,3 +296,4 @@ class ROCReboundStrategy(QCAlgorithm):
             self.error(message)
         else:
             self.log(message)  # Default to info level
+
