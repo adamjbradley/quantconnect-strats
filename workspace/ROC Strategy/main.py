@@ -299,16 +299,18 @@ class ROCReboundStrategy(QCAlgorithm):
             self.Liquidate(symbol)
             #self.logger.log(f"Preemptively liquidated {symbol.Value} due to margin risk.")
 
-    # Review and adjust liquidation orders in response to a margin call.
+    # Review and adjust liquidation orders in response to a margin call. Liquidate
     def on_margin_call(self, requests) -> list[SubmitOrderRequest]: 
-        self.logger.log("Margin Call Triggered. Responding with custom liquidation.", level="error")
+        self.logger.log("Margin Call Triggered. Liquidating all losing positions.", level="error")
 
-        # Example: sort by least profitable and return those first
-        sorted_reqs = sorted(
-            requests, key=lambda r: self.Portfolio[r.Symbol].UnrealizedProfit
-        )
-        return sorted_reqs[:2]  # Only allow 2 smallest losers to be liquidated
-    
+        # Filter requests for symbols with negative unrealized profit
+        losing_requests = [
+            r for r in requests
+            if r.Symbol in self.Portfolio and self.Portfolio[r.Symbol].UnrealizedProfit < 0
+        ]
+
+        return losing_requests
+
     def RebalanceMaxOpenPositions(self):
         margin_pct = self.Portfolio.MarginRemaining / self.Portfolio.TotalPortfolioValue if self.Portfolio.TotalPortfolioValue > 0 else 0
 
