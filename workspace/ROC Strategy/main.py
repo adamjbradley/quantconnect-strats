@@ -1,11 +1,12 @@
 from AlgorithmImports import *
 from symbol_data import SymbolData
 from utils import get_market_cap_thresholds, get_sector_name_to_code
+from ETFConstituentsUniverseSelectionModel import ETFConstituentsUniverseSelectionModel
 
 class ROCReboundStrategy(QCAlgorithm):
     def Initialize(self):
         # Set the start and end dates for the backtest
-        self.set_start_date(2015, 1, 1)
+        self.set_start_date(2020, 1, 1)
         self.set_end_date(2025, 1, 1)
         self.set_cash(100000)
 
@@ -40,6 +41,10 @@ class ROCReboundStrategy(QCAlgorithm):
         self.atr_take_profit_multiplier = float(self.get_parameter("atr_take_profit_multiplier") or 1.0)
         self.max_open_positions = int(self.get_parameter("max_open_positions") or 10)
         self.max_daily_loss_pct = float(self.get_parameter("max_daily_loss_pct") or 0.01)
+        self.universe_mode = self.get_parameter("universe_mode") or "etf"  # Options: "etf" or "top1000"
+        self.etf_symbol = self.get_parameter("etf_symbol") or "SPY"
+        self.min_open_positions_cap = int(self.get_parameter("min_open_positions_cap") or 5)
+        self.volatility_scaling_enabled = int(self.get_parameter("volatility_scaling_enabled") or True)
 
         # Log parameters
         self.custom_log(f"Parameter: capTiers = {cap_tiers_param}", level="debug")
@@ -52,8 +57,12 @@ class ROCReboundStrategy(QCAlgorithm):
         self.custom_log(f"Parameter: volume_window: {self.volume_window}", level="debug")
         self.custom_log(f"Parameter: max_holding_days: {self.max_holding_days}", level="debug")
         self.custom_log(f"Parameter: trade_allocation_pct: {self.trade_allocation_pct}", level="debug")
-        self.custom_log(f"Parameter: max_open_positions = {self.max_open_positions}", level="debug")
+        self.custom_log(f"Parameter: min_open_positions_cap = {self.min_open_positions_cap}", level="debug")
         self.custom_log(f"Parameter: max_daily_loss_pct = {self.max_daily_loss_pct}", level="debug")
+        self.custom_log(f"Parameter: universe_mode = {self.universe_mode}", level="debug")
+        self.custom_log(f"Parameter: etf_symbol = {self.etf_symbol}", level="debug")
+        self.custom_log(f"Parameter: min_open_positions_cap = {self.min_open_positions_cap}", level="debug")
+        self.custom_log(f"Parameter: volatility_scaling_enabled = {self.volatility_scaling_enabled}", level="debug")
 
         # Load market cap thresholds and sector codes from utils
         self.market_cap_thresholds = get_market_cap_thresholds()
@@ -61,11 +70,17 @@ class ROCReboundStrategy(QCAlgorithm):
         self.sector_codes = [sector_name_to_code[name] for name in self.sector_tiers if name in sector_name_to_code]
        
         self.universe_settings.resolution = Resolution.DAILY
-        self.add_universe(self.CoarseSelectionFunction, self.FineSelectionFunction)
+        self.universe_settings.asynchronous = True
+        
+        if self.universe_mode == "etf":
+            self.AddUniverseSelection(ETFConstituentsUniverseSelectionModel(self.etf_symbol, self.universe_settings, self._etf_constituents_filter))
+        else:
+            self.add_universe(self.CoarseSelectionFunction, self.FineSelectionFunction)
 
         self.symbol_data = {}
         self.to_buy = {}  # {symbol: signal_date}
         self.open_positions = {}  # {symbol: {entry, target, stop, entry_date}}
+        self.etf_constituents = set()
 
         # Variables to track daily loss
         self.starting_portfolio_value = self.Portfolio.TotalPortfolioValue
@@ -73,6 +88,7 @@ class ROCReboundStrategy(QCAlgorithm):
 
         # Schedule a function to reset daily tracking variables at market open
         self.Schedule.On(self.DateRules.EveryDay(), self.TimeRules.AfterMarketOpen("SPY", 1), self.ResetDailyLossTracking)
+        self.Schedule.On(self.DateRules.EveryDay(), self.TimeRules.AfterMarketOpen("SPY", 5), self.RebalanceMaxOpenPositions)
 
         self.set_warm_up(self.lookback + self.volume_window, Resolution.DAILY)
 
@@ -98,17 +114,54 @@ class ROCReboundStrategy(QCAlgorithm):
                 selected.append(stock.Symbol)
 
         return selected
+    
+    def _etf_constituents_filter(self, constituents: list[ETFConstituentUniverse]) -> list[Symbol]:
+        # Select the 10 largest Equities in the ETF.
+        selected = sorted(
+            [c for c in constituents if c.weight],
+            key=lambda c: c.weight, reverse=True
+        )[:10000]
+        return [c.symbol for c in selected]
 
-    def OnSecuritiesChanged(self, changes):
-        for security in changes.AddedSecurities:
-            symbol = security.Symbol
-            if symbol not in self.symbol_data:
-                # Initialize symbol data
-                self.symbol_data[symbol] = SymbolData(self, symbol, self.lookback, self.volume_window)
+def OnSecuritiesChanged(self, changes):
+    for security in changes.AddedSecurities:
+        symbol = security.Symbol
+        if self.universe_mode == "etf":
+            self.etf_constituents.add(symbol)
+
+        if symbol not in self.symbol_data:
+            self.symbol_data[symbol] = SymbolData(self, symbol, self.lookback, self.volume_window)
+
+    for security in changes.RemovedSecurities:
+        symbol = security.Symbol
+        if symbol in self.symbol_data:
+            del self.symbol_data[symbol]
+        if symbol in self.open_positions:
+            self.Liquidate(symbol)
+            self.open_positions.pop(symbol)
+        if self.universe_mode == "etf" and symbol in self.etf_constituents:
+            self.etf_constituents.remove(symbol)
 
     def OnData(self, data):
         if self.is_warming_up:    
             return
+
+
+        for symbol, pos in list(self.open_positions.items()):
+            price = self.securities[symbol].price
+            target = pos["target"]
+            stop = pos["stop"]
+
+            if price >= target or price <= stop:
+                self.liquidate(symbol)
+                self.open_positions.pop(symbol)
+            else:
+                holding_days = (self.time.date() - pos["entry_date"]).days
+                if holding_days > self.max_holding_days:
+                    self.liquidate(symbol)
+                    self.open_positions.pop(symbol)
+
+
 
         # Check if trading is halted for the day
         if self.trading_halted_today:
@@ -162,6 +215,7 @@ class ROCReboundStrategy(QCAlgorithm):
                 self.securities[symbol].is_tradable and 
                 len(self.open_positions) < self.max_open_positions):
                 
+                
                 price = self.securities[symbol].price
                 if price is None or price <= 0:
                     self.to_buy.pop(symbol)
@@ -185,19 +239,6 @@ class ROCReboundStrategy(QCAlgorithm):
                 if len(self.open_positions) >= self.max_open_positions:
                     self.custom_log(f"Max open positions reached. Skipping {symbol}", level="debug")
 
-        for symbol, pos in list(self.open_positions.items()):
-            price = self.securities[symbol].price
-            target = pos["target"]
-            stop = pos["stop"]
-
-            if price >= target or price <= stop:
-                self.liquidate(symbol)
-                self.open_positions.pop(symbol)
-            else:
-                holding_days = (self.time.date() - pos["entry_date"]).days
-                if holding_days > self.max_holding_days:
-                    self.liquidate(symbol)
-                    self.open_positions.pop(symbol)
 
     def OnOrderEvent(self, order_event: OrderEvent):
         if order_event.status != OrderStatus.FILLED:
@@ -208,6 +249,12 @@ class ROCReboundStrategy(QCAlgorithm):
             return
 
         price = order_event.fill_price
+
+        # 🔒 Safe access
+        if symbol not in self.symbol_data:
+            self.custom_log(f"OrderEvent received for unknown symbol: {symbol}", level="debug")
+            return
+
         atr = self.symbol_data[symbol].atr
         if not atr.IsReady:
             return
@@ -252,6 +299,28 @@ class ROCReboundStrategy(QCAlgorithm):
             requests, key=lambda r: self.Portfolio[r.Symbol].UnrealizedProfit
         )
         return sorted_reqs[:2]  # Only allow 2 smallest losers to be liquidated
+    
+
+    def RebalanceMaxOpenPositions(self):
+        margin_pct = self.Portfolio.MarginRemaining / self.Portfolio.TotalPortfolioValue if self.Portfolio.TotalPortfolioValue > 0 else 0
+
+        # Base scaling: more margin, more positions
+        scaled_by_margin = int(self.min_open_positions_cap + (self.max_open_positions_cap - self.min_open_positions_cap) * margin_pct)
+
+        # Optional: adjust based on VIX regime
+        if self.volatility_scaling_enabled and self.vix in self.Securities and self.Securities[self.vix].HasData:
+            vix_level = self.Securities[self.vix].Price
+            if vix_level > 30:
+                volatility_factor = 0.5
+            elif vix_level > 20:
+                volatility_factor = 0.75
+            else:
+                volatility_factor = 1.0
+            scaled_by_margin = int(scaled_by_margin * volatility_factor)
+
+        # Bound within min and max
+        self.max_open_positions = max(self.min_open_positions_cap, min(scaled_by_margin, self.max_open_positions_cap))
+        self.custom_log(f"[{self.Time}] Rebalanced max_open_positions to {self.max_open_positions}", level="info")
 
     def custom_log(self, message, level="info"):
         """
