@@ -204,6 +204,7 @@ class ROCReboundStrategy(QCAlgorithm):
                 avg_volume = symbol_data.average_volume()
                 current_volume = symbol_data.current_volume()
 
+
                 # Apply ROC range filter
                 deep_drop = self.roc_min <= roc_today <= self.roc_max
 
@@ -213,7 +214,8 @@ class ROCReboundStrategy(QCAlgorithm):
                 # ROC Strategy!
                 if deep_drop and roc_today > roc_3days_ago and roc_today > roc_yesterday and volume_surge:
                     if not self.portfolio[symbol].invested and symbol not in self.to_buy and symbol not in self.open_positions:
-                        self.to_buy[symbol] = self.time.date()
+                        self.to_buy[symbol] = self.Time.date()
+
 
         for symbol, signal_date in list(self.to_buy.items()):
             if self.time.date() <= signal_date:
@@ -250,34 +252,63 @@ class ROCReboundStrategy(QCAlgorithm):
 
 
     def OnOrderEvent(self, order_event: OrderEvent):
-        if order_event.status != OrderStatus.FILLED:
-            return
+        symbol = order_event.Symbol
+        status = order_event.Status
+        direction = order_event.Direction
+        order_id = order_event.OrderId
 
-        symbol = order_event.symbol
-        if order_event.direction != OrderDirection.BUY:
-            return
+        if status == OrderStatus.Filled:
+            if direction == OrderDirection.Buy:
+                price = order_event.FillPrice
+                if symbol not in self.symbol_data:
+                    self.logger.log(f"Filled BUY for unknown symbol: {symbol}", level="warning")
+                    return
 
-        price = order_event.fill_price
+                atr = self.symbol_data[symbol].atr
+                if not atr.IsReady:
+                    return
 
-        # Safe access
-        if symbol not in self.symbol_data:
-            self.logger.log(f"OrderEvent received for unknown symbol: {symbol}", level="debug")
-            return
+                atr_val = atr.Current.Value
+                target = price + self.atr_take_profit_multiplier * atr_val
+                stop = price - self.atr_stop_loss_multiplier * atr_val
 
-        atr = self.symbol_data[symbol].atr
-        if not atr.IsReady:
-            return
+                self.open_positions[symbol] = {
+                    "entry": price,
+                    "target": target,
+                    "stop": stop,
+                    "entry_date": self.Time.date()
+                }
+                self.logger.log(f"Order {order_id}: BUY filled for {symbol.Value} at {price:.2f}", level="info")
 
-        atr_val = atr.Current.Value
-        target = price + self.atr_take_profit_multiplier * atr_val
-        stop = price - self.atr_stop_loss_multiplier * atr_val
-    
-        self.open_positions[symbol] = {
-            "entry": price,
-            "target": target,
-            "stop": stop,
-            "entry_date": self.time.date()
-        }
+            elif direction == OrderDirection.Sell:
+                if symbol in self.open_positions:
+                    self.logger.log(f"Order {order_id}: SELL filled for {symbol.Value}", level="info")
+                    self.open_positions.pop(symbol, None)
+
+            elif status == OrderStatus.PartiallyFilled:
+                self.logger.log(f"Order {order_id}: Partially filled for {symbol.Value}", level="info")
+
+            elif status == OrderStatus.Canceled:
+                self.logger.log(f"Order {order_id}: Cancelled for {symbol.Value}", level="warning")
+
+            elif status == OrderStatus.Submitted:
+                self.logger.log(f"Order {order_id}: Submitted to broker for {symbol.Value}", level="debug")
+
+            elif status == OrderStatus.New:
+                self.logger.log(f"Order {order_id}: Created for {symbol.Value}", level="debug")
+
+            elif status == OrderStatus.Invalid:
+                self.logger.log(f"Order {order_id}: Invalid order for {symbol.Value}. Message: {order_event.Message}", level="error")
+
+            elif status == OrderStatus.CancelPending:
+                self.logger.log(f"Order {order_id}: Cancel pending for {symbol.Value}", level="debug")
+
+            elif status == OrderStatus.UpdateSubmitted:
+                self.logger.log(f"Order {order_id}: Update submitted for {symbol.Value}", level="debug")
+
+            else:
+                self.logger.log(f"Order {order_id}: Unknown status {status} for {symbol.Value}", level="error")
+                
 
     def ResetDailyLossTracking(self):
         self.starting_portfolio_value = self.Portfolio.TotalPortfolioValue
