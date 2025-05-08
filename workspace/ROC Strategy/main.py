@@ -29,11 +29,14 @@ class ROCReboundStrategy(QCAlgorithm):
         vix_chart.add_series(Series("VIX Close", SeriesType.LINE))
         
         # Retrieve parameters
-        cap_tiers_param = self.get_parameter("capTiers") or "micro, small, mid"
+        cap_tiers_param = self.get_parameter("capTiers") or ""
         self.cap_tiers = [x.strip().lower() for x in cap_tiers_param.split(",")]
 
-        sector_tiers_param = self.get_parameter("sectorTiers") or "technology"
+        sector_tiers_param = self.get_parameter("sectorTiers") or ""
         self.sector_tiers = [x.strip().lower() for x in sector_tiers_param.split(",")]
+
+        exchange_param = self.get_parameter("exchange_filter") or ""
+        self.exchange_filters = [x.strip().upper() for x in exchange_param.split(",")]
 
         self.volume_surge_threshold = float(self.get_parameter("volumeSurgeThreshold") or 0.5)
         self.vix_threshold = float(self.get_parameter("vixThreshold") or 25)
@@ -54,6 +57,7 @@ class ROCReboundStrategy(QCAlgorithm):
         self.volatility_scaling_enabled = bool(self.get_parameter("volatility_scaling_enabled") or True)
         self.enable_volume_surge = self.get_parameter("enable_volume_surge") or "true"
         self.allow_position_reduction = bool(self.get_parameter("allow_position_reduction") or False)
+        self.slippage_percent = float(self.get_parameter("slippage_percent") or 0.001)
 
         # Log parameters
         self.logger.log(f"Parameter: capTiers = {cap_tiers_param}", level="debug")
@@ -77,6 +81,8 @@ class ROCReboundStrategy(QCAlgorithm):
         self.logger.log(f"Parameter: volatility_scaling_enabled = {self.volatility_scaling_enabled}", level="debug")
         self.logger.log(f"Parameter: enable_volume_surge = {self.enable_volume_surge}", level="debug")
         self.logger.log(f"Parameter: allow_position_reduction = {self.allow_position_reduction}", level="debug")
+        self.logger.log(f"Parameter: slippage_percent = {self.slippage_percent}", level="debug")
+        self.logger.log(f"Parameter: exchange_filters = {self.exchange_filters}", level="debug")
 
         # Load market cap thresholds and sector codes from utils
         self.market_cap_thresholds = get_market_cap_thresholds()
@@ -111,17 +117,33 @@ class ROCReboundStrategy(QCAlgorithm):
 
     def FineSelectionFunction(self, fine):
         selected = []
-        for stock in fine:
-            # Market cap filter
-            market_cap = stock.MarketCap
-            cap_match = any(
-                self.market_cap_thresholds[tier][0] <= market_cap <= self.market_cap_thresholds[tier][1]
-                for tier in self.cap_tiers
-            )
 
-            # Sector filter using MorningstarSectorCode
+        for stock in fine:
+            # Defensive checks
+            if not stock.CompanyReference or not stock.AssetClassification:
+                continue
+
+            market_cap = stock.MarketCap
             sector_code = stock.AssetClassification.MorningstarSectorCode
-            sector_match = sector_code in self.sector_codes
+            exchange = stock.CompanyReference.PrimaryExchangeID
+
+            # Exchange filter — only apply if filters are provided
+            if self.exchange_filters and exchange not in self.exchange_filters:
+                continue
+
+            # Market cap filter — only apply if tiers are set
+            cap_match = True
+            if self.cap_tiers:
+                cap_match = any(
+                    self.market_cap_thresholds[tier][0] <= market_cap <= self.market_cap_thresholds[tier][1]
+                    for tier in self.cap_tiers
+                    if tier in self.market_cap_thresholds
+                )
+
+            # Sector filter — only apply if sector codes are set
+            sector_match = True
+            if self.sector_codes:
+                sector_match = sector_code in self.sector_codes
 
             if cap_match and sector_match:
                 selected.append(stock.Symbol)
@@ -273,9 +295,10 @@ class ROCReboundStrategy(QCAlgorithm):
     def on_securities_changed(self, changes: SecurityChanges) -> None:
         # Iterate through the added securities
         for security in changes.AddedSecurities:
-            self.Debug(f"{self.Time}: Added {security.Symbol}")
+            #self.Debug(f"{self.Time}: Added {security.Symbol}")
+            
             security.SetFeeModel(CustomFeeModel())
-            security.SetSlippageModel(CustomSlippageModel(slippage_percent=0.001))  # 0.1% slippage
+            security.SetSlippageModel(CustomSlippageModel(slippage_percent=self.slippage_percent))
 
             # Optional: initialize symbol data if not already added
             if security.Symbol not in self.symbol_data:
@@ -283,9 +306,9 @@ class ROCReboundStrategy(QCAlgorithm):
 
         # Iterate through the removed securities
         for security in changes.RemovedSecurities:
-            self.Debug(f"{self.Time}: Removed {security.Symbol}")
+            #self.Debug(f"{self.Time}: Removed {security.Symbol}")
             if self.Portfolio[security.Symbol].Invested:
-                self.Liquidate(security.Symbol, "Removed from Universe")
+                self.Liquidate(security.Symbol)
             # Clean up tracking dictionaries
             self.symbol_data.pop(security.Symbol, None)
             self.open_positions.pop(security.Symbol, None)
@@ -300,7 +323,7 @@ class ROCReboundStrategy(QCAlgorithm):
             if direction == OrderDirection.Buy:
                 price = order_event.FillPrice
                 if symbol not in self.symbol_data:
-                    self.logger.log(f"Filled BUY for unknown symbol: {symbol}", level="warning")
+                    #self.logger.log(f"Filled BUY for unknown symbol: {symbol}", level="warning")
                     return
 
                 atr = self.symbol_data[symbol].atr

@@ -29,3 +29,4 @@ def get_sector_name_to_code():
         'technology': MorningstarSectorCode.TECHNOLOGY,
         'utilities': MorningstarSectorCode.UTILITIES
     }
+

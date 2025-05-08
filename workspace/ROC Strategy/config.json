@@ -2,8 +2,9 @@
     "cloud-id": 22725991,
     "algorithm-language": "Python",
     "parameters": {
-        "capTiers": "micro, small, mid",
-        "sectorTiers": "technology",
+        "capTiers": "",
+        "sectorTiers": "",
+        "exchange_filter": "",
         "volumeSurgeThreshold": "0.5",
         "enable_volume_surge": "False",
         "volume_window": "14",
@@ -23,9 +24,11 @@
         "max_open_positions_cap": "1000",
         "volatility_scaling_enabled": "True",
         "allow_position_reduction": "False",
+        "slippage_percent": "0.001",
         "all_cap_tiers": "micro, small, mid, large, mega",
         "all_sector_tiers": "technology, healthcare, financials, consumer discretionary, consumer staples, energy, utilities, materials, industrials, real estate, communication services",
-        "all_etf_symbols": "SPY, QQQ, IWB, IWM, DIA, XLF, XLY, XLC, XLI, XLB, XLU, XBI"
+        "all_etf_symbols": "SPY, QQQ, IWB, IWM, DIA, XLF, XLY, XLC, XLI, XLB, XLU, XBI",
+        "all_exchanges": "NYS, NAS, ASE, TSE, AMS, SGO, XMAD, ASX, BVMF, LON, TKS, SHG, LIM, FRA, JSE, MIL, TAE, STO, ETR, PAR, BUE, KRX, SWX, PINX, CSE, PHS, MEX, TAI, IDX, OSL, BOG, NSE, HEL, MISX, HKG, IST, BOM, TSX, BRU, BATS, ARCX, GREY, DUS, BER, ROCO, CNQ, BSP, NEOE"
     },
     "description": "https://www.youtube.com/watch?v=afbo3rnmaX0&amp;t=149s",
     "organization-id": "9c2726f8cf057e5eb5c037ff8fdf4aa5",
