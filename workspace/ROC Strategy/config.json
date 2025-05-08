@@ -10,7 +10,7 @@
         "roc_min": "30",
         "roc_max": "10",
         "roc_lookback": "14",
-        "vix_threshold": "1000",
+        "vix_threshold": "25",
         "max_holding_days": "14",
         "trade_allocation_pct": "0.05",
         "atr_stop_loss_multiplier": "2.5",
@@ -24,7 +24,8 @@
         "volatility_scaling_enabled": "True",
         "allow_position_reduction": "False",
         "all_cap_tiers": "micro, small, mid, large, mega",
-        "all_sector_tiers": "technology, healthcare, financials, consumer discretionary, consumer staples, energy, utilities, materials, industrials, real estate, communication services"
+        "all_sector_tiers": "technology, healthcare, financials, consumer discretionary, consumer staples, energy, utilities, materials, industrials, real estate, communication services",
+        "all_etf_symbols": "SPY, QQQ, IWB, IWM, DIA, XLF, XLY, XLC, XLI, XLB, XLU, XBI"
     },
     "description": "https://www.youtube.com/watch?v=afbo3rnmaX0&amp;t=149s",
     "organization-id": "9c2726f8cf057e5eb5c037ff8fdf4aa5",

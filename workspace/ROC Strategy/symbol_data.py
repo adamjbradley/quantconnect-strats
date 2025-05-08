@@ -24,6 +24,7 @@ class SymbolData:
     def update(self, bar):
         self.roc_window.add(bar.Close)
         self.volume_window_data.add(bar.Volume)
+        self.price = bar.Close
         
     def is_ready(self):
         return self.roc_window.is_ready and self.volume_window_data.is_ready and self.atr.is_ready

@@ -64,11 +64,14 @@ class ROCReboundStrategy(QCAlgorithm):
         self.logger.log(f"Parameter: volume_window: {self.volume_window}", level="debug")
         self.logger.log(f"Parameter: max_holding_days: {self.max_holding_days}", level="debug")
         self.logger.log(f"Parameter: trade_allocation_pct: {self.trade_allocation_pct}", level="debug")
+        self.logger.log(f"Parameter: atr_stop_loss_multiplier: {self.atr_stop_loss_multiplier}", level="debug")
+        self.logger.log(f"Parameter: atr_take_profit_multiplier: {self.atr_take_profit_multiplier}", level="debug")
+        self.logger.log(f"Parameter: max_open_positions: {self.max_open_positions}", level="debug")
         self.logger.log(f"Parameter: max_daily_loss_pct = {self.max_daily_loss_pct}", level="debug")
         self.logger.log(f"Parameter: universe_mode = {self.universe_mode}", level="debug")
         self.logger.log(f"Parameter: etf_symbol = {self.etf_symbol}", level="debug")
-        self.logger.log(f"Parameter: max_open_positions_cap = {self.min_open_positions_cap}", level="debug")
         self.logger.log(f"Parameter: min_open_positions_cap = {self.min_open_positions_cap}", level="debug")
+        self.logger.log(f"Parameter: max_open_positions_cap = {self.max_open_positions_cap}", level="debug")
         self.logger.log(f"Parameter: volatility_scaling_enabled = {self.volatility_scaling_enabled}", level="debug")
         self.logger.log(f"Parameter: enable_volume_surge = {self.enable_volume_surge}", level="debug")
         self.logger.log(f"Parameter: allow_position_reduction = {self.allow_position_reduction}", level="debug")
@@ -216,7 +219,6 @@ class ROCReboundStrategy(QCAlgorithm):
                     if not self.portfolio[symbol].invested and symbol not in self.to_buy and symbol not in self.open_positions:
                         self.to_buy[symbol] = self.Time.date()
 
-
         for symbol, signal_date in list(self.to_buy.items()):
             if self.time.date() <= signal_date:
                 continue
@@ -250,7 +252,58 @@ class ROCReboundStrategy(QCAlgorithm):
                     #self.logger.log(f"Max open positions reached. Skipping {symbol}", level="debug")
                     continue
 
+    def OnSplits(self, splits: Splits):
+        for symbol, split in splits.items():
+            if split.Type == 0:
+                # Early warning signal — no action yet
+                self.logger.log(f"[SPLIT WARNING] {symbol.Value} will split soon.", level="debug")
+            
+            elif split.Type == 1:
+                split_ratio = split.SplitFactor
+                if split_ratio > 1:
+                    # FORWARD SPLIT (e.g., 2-for-1 → ratio = 2.0)
+                    self.logger.log(f"[FORWARD SPLIT] {symbol.Value} split {split_ratio:.2f}-for-1. Considering hold/entry.", level="info")
 
+                    # Optional: delay re-entry logic if just added to universe
+                    if symbol in self.to_buy:
+                        self.logger.log(f"Delaying trade for {symbol.Value} due to split adjustment.", level="debug")
+                        self.to_buy.pop(symbol)
+
+                elif 0 < split_ratio < 1:
+                    # REVERSE SPLIT (e.g., 1-for-10 → ratio = 0.1)
+                    self.logger.log(f"[REVERSE SPLIT] {symbol.Value} reverse split at ratio {split_ratio:.2f}. Liquidating to avoid exposure.", level="warning")
+                    self.Liquidate(symbol)
+                    if symbol in self.open_positions:
+                        self.open_positions.pop(symbol, None)
+
+                else:
+                    self.logger.log(f"[UNKNOWN SPLIT] {symbol.Value} with factor {split_ratio}. Manual review recommended.", level="error")
+                    
+    def OnDelistings(self, delistings: Delistings) -> None:
+        for symbol, delisting in delistings.items():
+            self.Debug(f"{self.Time}: Delisting event for {symbol} - Type: {delisting.Type}, Time: {delisting.Time}")
+            if self.Portfolio[symbol].Invested:
+                self.Liquidate(symbol, "Delisting Event")
+            self.symbol_data.pop(symbol, None)
+            self.open_positions.pop(symbol, None) 
+                   
+    def on_securities_changed(self, changes: SecurityChanges) -> None:
+        # Iterate through the added securities
+        for security in changes.AddedSecurities:
+            self.Debug(f"{self.Time}: Added {security.Symbol}")
+            # Optional: initialize symbol data if not already added
+            if security.Symbol not in self.symbol_data:
+                self.symbol_data[security.Symbol] = SymbolData(self, security.Symbol, self.roc_lookback, self.volume_window)
+
+        # Iterate through the removed securities
+        for security in changes.RemovedSecurities:
+            self.Debug(f"{self.Time}: Removed {security.Symbol}")
+            if self.Portfolio[security.Symbol].Invested:
+                self.Liquidate(security.Symbol, "Removed from Universe")
+            # Clean up tracking dictionaries
+            self.symbol_data.pop(security.Symbol, None)
+            self.open_positions.pop(security.Symbol, None)
+            
     def OnOrderEvent(self, order_event: OrderEvent):
         symbol = order_event.Symbol
         status = order_event.Status
@@ -278,11 +331,11 @@ class ROCReboundStrategy(QCAlgorithm):
                     "stop": stop,
                     "entry_date": self.Time.date()
                 }
-                self.logger.log(f"Order {order_id}: BUY filled for {symbol.Value} at {price:.2f}", level="info")
+                #self.logger.log(f"Order {order_id}: BUY filled for {symbol.Value} at {price:.2f}", level="info")
 
             elif direction == OrderDirection.Sell:
                 if symbol in self.open_positions:
-                    self.logger.log(f"Order {order_id}: SELL filled for {symbol.Value}", level="info")
+                    #self.logger.log(f"Order {order_id}: SELL filled for {symbol.Value}", level="info")
                     self.open_positions.pop(symbol, None)
 
             elif status == OrderStatus.PartiallyFilled:
