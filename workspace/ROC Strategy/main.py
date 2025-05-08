@@ -3,6 +3,8 @@ from symbol_data import SymbolData
 from utils import get_market_cap_thresholds, get_sector_name_to_code
 from ETFConstituentsUniverseSelectionModel import ETFConstituentsUniverseSelectionModel
 from logger import LoggerMixin
+from fee_model import *
+from slippage_model import *
 
 class ROCReboundStrategy(QCAlgorithm):
     def Initialize(self):
@@ -134,26 +136,7 @@ class ROCReboundStrategy(QCAlgorithm):
         )[:10000]
         return [c.symbol for c in selected]
 
-    def OnSecuritiesChanged(self, changes):
-        for security in changes.AddedSecurities:
-            symbol = security.Symbol
-            if self.universe_mode == "etf":
-                self.etf_constituents.add(symbol)
-
-            if symbol not in self.symbol_data:
-                self.symbol_data[symbol] = SymbolData(self, symbol, self.roc_lookback, self.volume_window)
-
-        for security in changes.RemovedSecurities:
-            symbol = security.Symbol
-            if symbol in self.symbol_data:
-                del self.symbol_data[symbol]
-            if symbol in self.open_positions:
-                self.Liquidate(symbol)
-                self.open_positions.pop(symbol)
-            if self.universe_mode == "etf" and symbol in self.etf_constituents:
-                self.etf_constituents.remove(symbol)
-
-    def OnData(self, data):
+    def on_data(self, data):
         if self.is_warming_up:    
             return
 
@@ -252,7 +235,7 @@ class ROCReboundStrategy(QCAlgorithm):
                     #self.logger.log(f"Max open positions reached. Skipping {symbol}", level="debug")
                     continue
 
-    def OnSplits(self, splits: Splits):
+    def on_splits(self, splits: Splits):
         for symbol, split in splits.items():
             if split.Type == 0:
                 # Early warning signal — no action yet
@@ -279,7 +262,7 @@ class ROCReboundStrategy(QCAlgorithm):
                 else:
                     self.logger.log(f"[UNKNOWN SPLIT] {symbol.Value} with factor {split_ratio}. Manual review recommended.", level="error")
                     
-    def OnDelistings(self, delistings: Delistings) -> None:
+    def on_delistings(self, delistings: Delistings) -> None:
         for symbol, delisting in delistings.items():
             self.Debug(f"{self.Time}: Delisting event for {symbol} - Type: {delisting.Type}, Time: {delisting.Time}")
             if self.Portfolio[symbol].Invested:
@@ -291,6 +274,9 @@ class ROCReboundStrategy(QCAlgorithm):
         # Iterate through the added securities
         for security in changes.AddedSecurities:
             self.Debug(f"{self.Time}: Added {security.Symbol}")
+            security.SetFeeModel(CustomFeeModel())
+            security.SetSlippageModel(CustomSlippageModel(slippage_percent=0.001))  # 0.1% slippage
+
             # Optional: initialize symbol data if not already added
             if security.Symbol not in self.symbol_data:
                 self.symbol_data[security.Symbol] = SymbolData(self, security.Symbol, self.roc_lookback, self.volume_window)
@@ -304,7 +290,7 @@ class ROCReboundStrategy(QCAlgorithm):
             self.symbol_data.pop(security.Symbol, None)
             self.open_positions.pop(security.Symbol, None)
             
-    def OnOrderEvent(self, order_event: OrderEvent):
+    def on_order_event(self, order_event: OrderEvent):
         symbol = order_event.Symbol
         status = order_event.Status
         direction = order_event.Direction
@@ -362,12 +348,7 @@ class ROCReboundStrategy(QCAlgorithm):
             else:
                 self.logger.log(f"Order {order_id}: Unknown status {status} for {symbol.Value}", level="error")
                 
-
-    def ResetDailyLossTracking(self):
-        self.starting_portfolio_value = self.Portfolio.TotalPortfolioValue
-        self.trading_halted_today = False
-
-    def OnEndOfAlgorithm(self):
+    def on_end_of_algorithm(self):
         self.liquidate()
 
     # Track when remaining margin is low.
@@ -383,7 +364,6 @@ class ROCReboundStrategy(QCAlgorithm):
             self.Liquidate(symbol)
             #self.logger.log(f"Preemptively liquidated {symbol.Value} due to margin risk.")
 
-
     # Review and adjust liquidation orders in response to a margin call. Liquidate
     def on_margin_call(self, requests) -> list[SubmitOrderRequest]: 
         self.logger.log("Margin Call Triggered. Liquidating all losing positions.", level="error")
@@ -395,6 +375,10 @@ class ROCReboundStrategy(QCAlgorithm):
         ]
 
         return losing_requests
+
+    def ResetDailyLossTracking(self):
+            self.starting_portfolio_value = self.Portfolio.TotalPortfolioValue
+            self.trading_halted_today = False
 
     def RebalanceMaxOpenPositions(self):
         margin_pct = self.Portfolio.MarginRemaining / self.Portfolio.TotalPortfolioValue if self.Portfolio.TotalPortfolioValue > 0 else 0
@@ -428,17 +412,3 @@ class ROCReboundStrategy(QCAlgorithm):
                 self.open_positions.items(),
                 key=lambda kv: self.Portfolio[kv[0]].UnrealizedProfit
             )
-
-    def custom_log(self, message, level="info"):
-        """
-        Custom logging method to handle different log levels.
-        Levels: 'debug', 'info', 'error'
-        """
-        if level == "debug":
-            self.debug(message)
-        elif level == "info":
-            self.log(message)
-        elif level == "error":
-            self.error(message)
-        else:
-            self.log(message)  # Default to info level
