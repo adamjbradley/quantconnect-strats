@@ -261,8 +261,9 @@ class ROCReboundStrategy(QCAlgorithm):
         for symbol, split in splits.items():
             if split.Type == 0:
                 # Early warning signal — no action yet
-                self.logger.log(f"[SPLIT WARNING] {symbol.Value} will split soon.", level="debug")
-            
+                #self.logger.log(f"[SPLIT WARNING] {symbol.Value} will split soon.", level="debug")
+                continue                
+
             elif split.Type == 1:
                 split_ratio = split.SplitFactor
                 if split_ratio > 1:
