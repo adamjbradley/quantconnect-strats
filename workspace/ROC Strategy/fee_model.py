@@ -1,7 +1,7 @@
 from AlgorithmImports import *
 
 class CustomFeeModel(FeeModel):
-    def __init__(self, fixed_fee=1.00, percentage=0):  # e.g., $1 fixed + 0.1%
+    def __init__(self, fixed_fee=1.00, percentage=0.001):  # e.g., $1 fixed + 0.1%
         self.fixed_fee = fixed_fee
         self.percentage = percentage
 
