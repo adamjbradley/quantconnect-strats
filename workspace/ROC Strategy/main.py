@@ -1,7 +1,7 @@
 from AlgorithmImports import *
-from ETFConstituentsUniverseSelectionModel import ETFConstituentsUniverseSelectionModel
 from symbol_data import SymbolData
 from utils import get_market_cap_thresholds, get_sector_name_to_code
+from ETFConstituentsUniverseSelectionModel import ETFConstituentsUniverseSelectionModel
 from logger import LoggerMixin
 from fee_model import *
 from slippage_model import *
@@ -12,6 +12,9 @@ class ROCReboundStrategy(QCAlgorithm):
         self.set_start_date(2015, 1, 1)
         self.set_end_date(2025, 1, 1)
         self.set_cash(100000)
+
+        self.logger = LoggerMixin(self)
+        self.logger.log("Logger initialized", level="debug")
 
         # Add SPY as the benchmark
         self.add_equity("SPY", Resolution.DAILY)
@@ -26,16 +29,16 @@ class ROCReboundStrategy(QCAlgorithm):
         vix_chart.add_series(Series("VIX Close", SeriesType.LINE))
         
         # Retrieve parameters
-        cap_tiers_param = self.get_parameter("capTiers") or ""
-        self.cap_tiers = [x.strip().lower() for x in cap_tiers_param.split(",")]
+        cap_tiers = self.get_parameter("cap_tiers") or ""
+        self.cap_tiers = [x.strip().lower() for x in cap_tiers.split(",")]
 
-        sector_tiers_param = self.get_parameter("sectorTiers") or ""
-        self.sector_tiers = [x.strip().lower() for x in sector_tiers_param.split(",")]
+        sector_tiers = self.get_parameter("sector_tiers") or ""
+        self.sector_tiers = [x.strip().lower() for x in sector_tiers.split(",")]
 
         exchange_param = self.get_parameter("exchange_filter") or ""
         self.exchange_filters = [x.strip().upper() for x in exchange_param.split(",")]
 
-        self.volume_surge_threshold = float(self.get_parameter("volume_surge_threshold") or 0.5)
+        self.volume_surge_threshold = float(self.get_parameter("volumeSurgeThreshold") or 0.5)
         self.vix_threshold = float(self.get_parameter("vixThreshold") or 25)
         self.roc_min = float(self.get_parameter("rocMin") or -30)
         self.roc_max = float(self.get_parameter("rocMax") or -15)
@@ -53,18 +56,13 @@ class ROCReboundStrategy(QCAlgorithm):
         self.max_open_positions_cap = int(self.get_parameter("max_open_positions_cap") or 10)
         self.volatility_scaling_enabled = bool(self.get_parameter("volatility_scaling_enabled") or True)
         self.enable_volume_surge = self.get_parameter("enable_volume_surge") or "true"
-        self.allow_position_reduction = bool(self.get_parameter("allow_position_reduction") or False)
         self.slippage_percent = float(self.get_parameter("slippage_percent") or 0.001)
-    
-        self.log_level = self.get_parameter("log_level") or "error"
-        self.logger = LoggerMixin(self)
-        
-        
+        self.enable_daily_rebalance = bool(self.get_parameter("enable_daily_rebalance") or False)
+
         # Log parameters
-        self.logger.log("Logger initialized", level="trace")
-        self.logger.log(f"Parameter: capTiers = {cap_tiers_param}", level="debug")
-        self.logger.log(f"Parameter: sectorTiers = {sector_tiers_param}", level="debug")
-        self.logger.log(f"Parameter: volume_surge_threshold = {self.volume_surge_threshold}", level="debug")
+        self.logger.log(f"Parameter: cap_tiers = {cap_tiers}", level="debug")
+        self.logger.log(f"Parameter: sector_tiers = {sector_tiers}", level="debug")
+        self.logger.log(f"Parameter: volumeSurgeThreshold = {self.volume_surge_threshold}", level="debug")
         self.logger.log(f"Parameter: vixThreshold = {self.vix_threshold}", level="debug")
         self.logger.log(f"Parameter: rocMin = {self.roc_min}", level="debug")
         self.logger.log(f"Parameter: rocMax = {self.roc_max}", level="debug")
@@ -82,9 +80,9 @@ class ROCReboundStrategy(QCAlgorithm):
         self.logger.log(f"Parameter: max_open_positions_cap = {self.max_open_positions_cap}", level="debug")
         self.logger.log(f"Parameter: volatility_scaling_enabled = {self.volatility_scaling_enabled}", level="debug")
         self.logger.log(f"Parameter: enable_volume_surge = {self.enable_volume_surge}", level="debug")
-        self.logger.log(f"Parameter: allow_position_reduction = {self.allow_position_reduction}", level="debug")
         self.logger.log(f"Parameter: slippage_percent = {self.slippage_percent}", level="debug")
         self.logger.log(f"Parameter: exchange_filters = {self.exchange_filters}", level="debug")
+        self.logger.log(f"Parameter: enable_daily_rebalance = {self.enable_daily_rebalance}", level="debug")
 
         # Load market cap thresholds and sector codes from utils
         self.market_cap_thresholds = get_market_cap_thresholds()
@@ -109,7 +107,10 @@ class ROCReboundStrategy(QCAlgorithm):
 
         # Schedule a function to reset daily tracking variables at market open
         self.Schedule.On(self.DateRules.EveryDay(), self.TimeRules.AfterMarketOpen("SPY", 1), self.ResetDailyLossTracking)
-        self.Schedule.On(self.DateRules.EveryDay(), self.TimeRules.AfterMarketOpen("SPY", 5), self.RebalanceMaxOpenPositions)
+
+        if self.enable_daily_rebalance:
+            # Schedule a function to rebalance max open positions daily
+            self.Schedule.On(self.DateRules.EveryDay(), self.TimeRules.AfterMarketOpen("SPY", 1), self.RebalanceMaxOpenPositions)
 
         self.set_warm_up(self.roc_lookback + self.volume_window, Resolution.DAILY)
 
@@ -192,7 +193,7 @@ class ROCReboundStrategy(QCAlgorithm):
         if loss_pct >= self.max_daily_loss_pct:
             self.Liquidate()
             self.trading_halted_today = True
-            self.logger.log(f"Maximum daily loss exceeded: {loss_pct:.2%}. Trading halted for the day.", level="error")
+            #self.Debug(f"Maximum daily loss exceeded: {loss_pct:.2%}. Trading halted for the day.")
             return
 
         # Check VIX level
@@ -213,7 +214,6 @@ class ROCReboundStrategy(QCAlgorithm):
                 roc_3days_ago = symbol_data.roc_3days_ago()
                 avg_volume = symbol_data.average_volume()
                 current_volume = symbol_data.current_volume()
-
 
                 # Apply ROC range filter
                 deep_drop = self.roc_min <= roc_today <= self.roc_max
@@ -262,10 +262,9 @@ class ROCReboundStrategy(QCAlgorithm):
     def on_splits(self, splits: Splits):
         for symbol, split in splits.items():
             if split.Type == 0:
-                # Early ing signal — no action yet
-                #self.logger.log(f"[SPLIT warning] {symbol.Value} will split soon.", level="debug")
-                continue                
-
+                # Early warning signal — no action yet
+                self.logger.log(f"[SPLIT WARNING] {symbol.Value} will split soon.", level="debug")
+            
             elif split.Type == 1:
                 split_ratio = split.SplitFactor
                 if split_ratio > 1:
@@ -279,7 +278,7 @@ class ROCReboundStrategy(QCAlgorithm):
 
                 elif 0 < split_ratio < 1:
                     # REVERSE SPLIT (e.g., 1-for-10 → ratio = 0.1)
-                    self.logger.log(f"[REVERSE SPLIT] {symbol.Value} reverse split at ratio {split_ratio:.2f}. Liquidating to avoid exposure.", level="warn")
+                    self.logger.log(f"[REVERSE SPLIT] {symbol.Value} reverse split at ratio {split_ratio:.2f}. Liquidating to avoid exposure.", level="warning")
                     self.Liquidate(symbol)
                     if symbol in self.open_positions:
                         self.open_positions.pop(symbol, None)
@@ -289,7 +288,7 @@ class ROCReboundStrategy(QCAlgorithm):
                     
     def on_delistings(self, delistings: Delistings) -> None:
         for symbol, delisting in delistings.items():
-            self.logger.log(f"{self.Time}: Delisting event for {symbol} - Type: {delisting.Type}, Time: {delisting.Time}", level="warn")
+            self.Debug(f"{self.Time}: Delisting event for {symbol} - Type: {delisting.Type}, Time: {delisting.Time}")
             if self.Portfolio[symbol].Invested:
                 self.Liquidate(symbol, "Delisting Event")
             self.symbol_data.pop(symbol, None)
@@ -298,7 +297,7 @@ class ROCReboundStrategy(QCAlgorithm):
     def on_securities_changed(self, changes: SecurityChanges) -> None:
         # Iterate through the added securities
         for security in changes.AddedSecurities:
-            self.logger.log(f"{self.Time}: Added {security.Symbol}", level="debug")
+            #self.Debug(f"{self.Time}: Added {security.Symbol}")
             
             security.SetFeeModel(CustomFeeModel())
             security.SetSlippageModel(CustomSlippageModel(slippage_percent=self.slippage_percent))
@@ -309,7 +308,7 @@ class ROCReboundStrategy(QCAlgorithm):
 
         # Iterate through the removed securities
         for security in changes.RemovedSecurities:
-            self.logger.log(f"{self.Time}: Removed {security.Symbol}", level="debug")
+            #self.Debug(f"{self.Time}: Removed {security.Symbol}")
             if self.Portfolio[security.Symbol].Invested:
                 self.Liquidate(security.Symbol)
             # Clean up tracking dictionaries
@@ -326,7 +325,7 @@ class ROCReboundStrategy(QCAlgorithm):
             if direction == OrderDirection.Buy:
                 price = order_event.FillPrice
                 if symbol not in self.symbol_data:
-                    #self.logger.log(f"Filled BUY for unknown symbol: {symbol}", level="warn")
+                    #self.logger.log(f"Filled BUY for unknown symbol: {symbol}", level="warning")
                     return
 
                 atr = self.symbol_data[symbol].atr
@@ -354,7 +353,7 @@ class ROCReboundStrategy(QCAlgorithm):
                 self.logger.log(f"Order {order_id}: Partially filled for {symbol.Value}", level="info")
 
             elif status == OrderStatus.Canceled:
-                self.logger.log(f"Order {order_id}: Cancelled for {symbol.Value}", level="warn")
+                self.logger.log(f"Order {order_id}: Cancelled for {symbol.Value}", level="warning")
 
             elif status == OrderStatus.Submitted:
                 self.logger.log(f"Order {order_id}: Submitted to broker for {symbol.Value}", level="debug")
@@ -379,7 +378,7 @@ class ROCReboundStrategy(QCAlgorithm):
 
     # Track when remaining margin is low.
     def on_margin_call_warning(self) -> None:
-        self.logger.log("⚠️ Margin Call warning Triggered!", level="warn")
+        self.logger.log("⚠️ Margin Call Warning Triggered!", level="error")
         
         # Optional: start liquidating smallest winners or highest-risk trades
         sorted_by_risk = sorted(
