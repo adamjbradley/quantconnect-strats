@@ -30,3 +30,5 @@ def get_sector_name_to_code():
         'utilities': MorningstarSectorCode.UTILITIES
     }
 
+def str_to_bool(s):
+    return str(s).strip().lower() in ["true", "1", "yes", "on"]

@@ -1,6 +1,6 @@
 from AlgorithmImports import *
 from symbol_data import SymbolData
-from utils import get_market_cap_thresholds, get_sector_name_to_code
+from utils import get_market_cap_thresholds, get_sector_name_to_code, str_to_bool
 from ETFConstituentsUniverseSelectionModel import ETFConstituentsUniverseSelectionModel
 from logger import LoggerMixin
 from fee_model import *
@@ -44,30 +44,34 @@ class ROCReboundStrategy(QCAlgorithm):
         exchange_param = self.get_parameter("exchange_filter") or ""
         self.exchange_filters = [x.strip().upper() for x in exchange_param.split(",")]
 
+        self.enable_volume_surge = self.get_parameter("enable_volume_surge") or "False"
         self.volume_surge_threshold = float(self.get_parameter("volume_surge_threshold") or 0.5)
+
         self.vix_threshold = float(self.get_parameter("vix_threshold") or 25)
-        self.roc_min = float(self.get_parameter("rocMin") or -30)
-        self.roc_max = float(self.get_parameter("rocMax") or -15)
+        self.roc_min = float(self.get_parameter("roc_min") or -30)
+        self.roc_max = float(self.get_parameter("roc_max") or -15)
         self.roc_lookback = int(self.get_parameter("roc_lookback") or 14)
         self.volume_window = int(self.get_parameter("volume_window") or 14)
         self.max_holding_days = int(self.get_parameter("max_holding_days") or 15)
         self.trade_allocation_pct = float(self.get_parameter("trade_allocation_pct") or 0.1)
         self.atr_stop_loss_multiplier = float(self.get_parameter("atr_stop_loss_multiplier") or 2.5)
         self.atr_take_profit_multiplier = float(self.get_parameter("atr_take_profit_multiplier") or 1.0)
+
         self.max_open_positions = int(self.get_parameter("max_open_positions") or 10)
         self.max_daily_loss_pct = float(self.get_parameter("max_daily_loss_pct") or 0.01)
         self.universe_mode = self.get_parameter("universe_mode") or "etf"  # Options: "etf" or "top1000"
         self.etf_symbol = self.get_parameter("etf_symbol") or "SPY"
         self.min_open_positions_cap = int(self.get_parameter("min_open_positions_cap") or 5)
         self.max_open_positions_cap = int(self.get_parameter("max_open_positions_cap") or 10)
-        self.volatility_scaling_enabled = bool(self.get_parameter("volatility_scaling_enabled") or True)
-        self.enable_volume_surge = self.get_parameter("enable_volume_surge") or "true"
+        self.volatility_scaling_enabled = self.get_parameter("volatility_scaling_enabled") or "True"   
         self.slippage_percent = float(self.get_parameter("slippage_percent") or 0.001)
-        self.enable_daily_rebalance = bool(self.get_parameter("enable_daily_rebalance") or False)
+        self.enable_daily_rebalance = self.get_parameter("enable_daily_rebalance") or "False"
 
         # Log parameters
         self.logger.log(f"Parameter: cap_tiers = {cap_tiers}", level="info")
         self.logger.log(f"Parameter: sector_tiers = {sector_tiers}", level="info")
+        self.logger.log(f"Parameter: exchange_filters = {self.exchange_filters}", level="info")
+        self.logger.log(f"Parameter: enable_volume_surge = {self.enable_volume_surge}", level="info")        
         self.logger.log(f"Parameter: volumeSurgeThreshold = {self.volume_surge_threshold}", level="info")
         self.logger.log(f"Parameter: vixThreshold = {self.vix_threshold}", level="info")
         self.logger.log(f"Parameter: rocMin = {self.roc_min}", level="info")
@@ -85,9 +89,7 @@ class ROCReboundStrategy(QCAlgorithm):
         self.logger.log(f"Parameter: min_open_positions_cap = {self.min_open_positions_cap}", level="info")
         self.logger.log(f"Parameter: max_open_positions_cap = {self.max_open_positions_cap}", level="info")
         self.logger.log(f"Parameter: volatility_scaling_enabled = {self.volatility_scaling_enabled}", level="info")
-        self.logger.log(f"Parameter: enable_volume_surge = {self.enable_volume_surge}", level="info")
         self.logger.log(f"Parameter: slippage_percent = {self.slippage_percent}", level="info")
-        self.logger.log(f"Parameter: exchange_filters = {self.exchange_filters}", level="info")
         self.logger.log(f"Parameter: enable_daily_rebalance = {self.enable_daily_rebalance}", level="info")
 
         # Load market cap thresholds and sector codes from utils
@@ -225,10 +227,11 @@ class ROCReboundStrategy(QCAlgorithm):
                 deep_drop = self.roc_min <= roc_today <= self.roc_max
 
                 # Apply Volume surge filter                
-                volume_surge = not self.enable_volume_surge or current_volume >= self.volume_surge_threshold * avg_volume
+                volume_surge_enabled = self.enable_volume_surge.lower() == "true"
+                passes_volume_surge = True if not volume_surge_enabled else current_volume >= self.volume_surge_threshold * avg_volume
 
                 # ROC Strategy!
-                if deep_drop and roc_today > roc_3days_ago and roc_today > roc_yesterday and volume_surge:
+                if deep_drop and roc_today > roc_3days_ago and roc_today > roc_yesterday and passes_volume_surge:
                     if not self.portfolio[symbol].invested and symbol not in self.to_buy and symbol not in self.open_positions:
                         self.to_buy[symbol] = self.Time.date()
 
@@ -430,7 +433,7 @@ class ROCReboundStrategy(QCAlgorithm):
         if self.volatility_scaling_enabled and self.vix in self.Securities and self.Securities[self.vix].HasData:
             vix_level = self.Securities[self.vix].Price
             if vix_level > 30:
-                volatility_factor = 0.5
+                volatility_factor = 0.25
             elif vix_level > 20:
                 volatility_factor = 0.75
             else:
