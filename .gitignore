@@ -3,3 +3,9 @@ workspace/.QuantConnect/
 workspace/data/
 .QuantConnect/cache/
 lean-local.sln
+workspace/Chart Pattern Trader/.idea/Chart Pattern Trader.iml
+workspace/Chart Pattern Trader/.idea/misc.xml
+workspace/Chart Pattern Trader/.idea/modules.xml
+workspace/Chart Pattern Trader/.idea/workspace.xml
+workspace/Chart Pattern Trader/.vscode/launch.json
+workspace/Chart Pattern Trader/.vscode/settings.json

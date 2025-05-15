@@ -1,0 +1,12 @@
+{
+    "algorithm-language": "Python",
+    "parameters": {
+        "smoothing_sigma": "2",
+        "max_position_pct": "0.1"
+    },
+    "description": "",
+    "cloud-id": 23001028,
+    "organization-id": "9c2726f8cf057e5eb5c037ff8fdf4aa5",
+    "python-venv": 1,
+    "encrypted": false
+}
