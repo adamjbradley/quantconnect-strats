@@ -66,6 +66,7 @@ class ROCReboundStrategy(QCAlgorithm):
         self.volatility_scaling_enabled = self.get_parameter("volatility_scaling_enabled") or "True"   
         self.slippage_percent = float(self.get_parameter("slippage_percent") or 0.001)
         self.enable_daily_rebalance = self.get_parameter("enable_daily_rebalance") or "False"
+        self.allow_forced_liquidation = self.get_parameter("allow_forced_liquidation") or "True"
 
         # Log parameters
         self.logger.log(f"Parameter: cap_tiers = {cap_tiers}", level="info")
@@ -91,6 +92,7 @@ class ROCReboundStrategy(QCAlgorithm):
         self.logger.log(f"Parameter: volatility_scaling_enabled = {self.volatility_scaling_enabled}", level="info")
         self.logger.log(f"Parameter: slippage_percent = {self.slippage_percent}", level="info")
         self.logger.log(f"Parameter: enable_daily_rebalance = {self.enable_daily_rebalance}", level="info")
+        self.logger.log(f"Parameter: allow_forced_liquidation = {self.allow_forced_liquidation}", level="info")
 
         # Load market cap thresholds and sector codes from utils
         self.market_cap_thresholds = get_market_cap_thresholds()
@@ -118,7 +120,7 @@ class ROCReboundStrategy(QCAlgorithm):
 
         if self.enable_daily_rebalance:
             # Schedule a function to rebalance max open positions daily
-            self.Schedule.On(self.DateRules.EveryDay(), self.TimeRules.AfterMarketOpen("SPY", 1), self.RebalanceMaxOpenPositions)
+            self.Schedule.On(self.DateRules.EveryDay(), self.TimeRules.AfterMarketOpen("SPY", 5), self.RebalanceMaxOpenPositions)
 
         self.set_warm_up(self.roc_lookback + self.volume_window, Resolution.DAILY)
 
@@ -156,13 +158,22 @@ class ROCReboundStrategy(QCAlgorithm):
             if self.sector_codes:
                 sector_match = sector_code in self.sector_codes
 
+            # ✅ New: Only keep stocks with positive earnings or positive ROE
+            eps_12m = stock.EarningReports.BasicEPS.TwelveMonths
+            roe = stock.OperationRatios.ROE.Value
+            fundamental_match = (eps_12m is not None and eps_12m > 0) or (roe is not None and roe > 0)
+
+            # Low Debt-to-Equity
+            debt_equity = stock.OperationRatios.TotalDebtEquityRatio.Value
+            has_low_debt = debt_equity is not None and debt_equity <= 1.0  # Threshold can be parameterize
+
             if cap_match and sector_match:
                 selected.append(stock.Symbol)
 
         return selected
 
     def _etf_constituents_filter(self, constituents: list[ETFConstituentUniverse]) -> list[Symbol]:
-        # Select the 10 largest Equities in the ETF.
+        # Select all Equities in the ETF.
         selected = sorted(
             [c for c in constituents if c.weight],
             key=lambda c: c.weight, reverse=True
@@ -433,7 +444,7 @@ class ROCReboundStrategy(QCAlgorithm):
         if self.volatility_scaling_enabled and self.vix in self.Securities and self.Securities[self.vix].HasData:
             vix_level = self.Securities[self.vix].Price
             if vix_level > 30:
-                volatility_factor = 0.25
+                volatility_factor = 0.5
             elif vix_level > 20:
                 volatility_factor = 0.75
             else:
@@ -455,3 +466,10 @@ class ROCReboundStrategy(QCAlgorithm):
                 self.open_positions.items(),
                 key=lambda kv: self.Portfolio[kv[0]].UnrealizedProfit
             )
+
+            # Close least profitable positions first
+            if self.allow_forced_liquidation:
+                for symbol, _ in sorted_positions[:excess]:
+                    self.logger.log(f"[{self.Time}] Closing {symbol.Value} due to cap rebalance", level="debug")
+                    self.Liquidate(symbol)
+                    self.open_positions.pop(symbol, None)
